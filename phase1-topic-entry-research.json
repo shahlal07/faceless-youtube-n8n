@@ -10,7 +10,7 @@
       "parameters": {
         "width": 420,
         "height": 420,
-        "content": "## $0 by design — no Anthropic API key anywhere in this workflow\n\nThe Anthropic API has no free tier — every call bills, even a cheap one. To\nkeep this workflow at genuinely $0, it does NOT call the Anthropic API. It\nstops at Step 2 below, shows you the exact Research Agent prompt, and waits\nfor you to paste back the JSON you get from running that prompt in your own\nClaude.ai / Claude Code chat (whatever you already have access to — no new\nbilling from this step). If you later decide the cents-per-run cost of\nautomating this is worth it, wiring in `Call Anthropic — Research Agent`\nas a normal HTTP Request node is a small, reversible change.\n\n## Before running this\n\n1. Import this workflow into n8n.\n2. Open the **Config** node and paste in `supabase_service_role_key` —\n   Supabase dashboard → Project Settings → API (project ref\n   `bgzsdkzfakzwcvplfobq`). That's the only secret this workflow needs.\n3. Activate the workflow, open the Form Trigger's Production URL, submit a\n   channel + topic.\n4. On the next screen, copy the shown prompt into your own Claude chat, run\n   it, and paste the JSON response back into the field provided.\n5. The final screen shows the parsed research dossier for human review. It's\n   also written to `research_dossiers` — check it in Supabase or the dashboard.\n\n**Known rough edge:** the Supabase key lives in the Config node's plain value\nfor now, not n8n's encrypted Credentials store, so Phase 1 works end to end\ntoday. Move it into a proper n8n Header Auth credential before this workflow\n(or any like it) runs unattended — per `01-ARCHITECTURE.md`'s credentials\nsection.\n\nThis workflow only touches `topics`, `job_queue`, `job_attempts`, and\n`research_dossiers`. It does not run Story Architect, Script Writer, or\nanything past Phase 1."
+        "content": "## $0 by design — no Anthropic API key anywhere in this workflow\n\nThe Anthropic API has no free tier — every call bills, even a cheap one. To\nkeep this workflow at genuinely $0, it does NOT call the Anthropic API. It\nstops at Step 2 below, shows you the exact Research Agent prompt, and waits\nfor you to paste back the JSON you get from running that prompt in your own\nClaude.ai / Claude Code chat (whatever you already have access to — no new\nbilling from this step). If you later decide the cents-per-run cost of\nautomating this is worth it, wiring in `Call Anthropic — Research Agent`\nas a normal HTTP Request node is a small, reversible change.\n\n## Before running this\n\n1. In n8n, create a credential of type **Supabase API** (Credentials → Add →\n   search \"Supabase\") with Host `https://bgzsdkzfakzwcvplfobq.supabase.co`\n   and your `service_role` secret from Supabase → Project Settings → API.\n   That's the only secret this workflow needs, and it never touches a node's\n   plain parameters — n8n stores it encrypted.\n2. Import this workflow, then open each of the 6 HTTP Request nodes (Get\n   Channel, Insert Topic, Create Job, Insert Research Dossier, Insert Job\n   Attempt, Update Job Done) and set Authentication → Predefined Credential\n   Type → Supabase API → the credential from step 1. Each node ships with\n   `authentication: none` since credential IDs are per-instance and can't be\n   exported — this one-time wiring is expected on a fresh import.\n3. Activate the workflow, open the Form Trigger's Production URL, submit a\n   channel + topic.\n4. On the next screen, copy the shown prompt into your own Claude chat, run\n   it, and paste the JSON response back into the field provided.\n5. The final screen shows the parsed research dossier for human review. It's\n   also written to `research_dossiers` — check it in Supabase or the dashboard.\n\nThis workflow only touches `topics`, `job_queue`, `job_attempts`, and\n`research_dossiers`. It does not run Story Architect, Script Writer, or\nanything past Phase 1."
       }
     },
     {
@@ -61,8 +61,7 @@
       "parameters": {
         "assignments": {
           "assignments": [
-            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" },
-            { "id": "2", "name": "supabase_service_role_key", "type": "string", "value": "PASTE_SUPABASE_SERVICE_ROLE_KEY_HERE" }
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
           ]
         },
         "includeOtherFields": true,
@@ -78,18 +77,13 @@
       "parameters": {
         "method": "GET",
         "url": "={{ $json.supabase_url }}/rest/v1/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "select", "value": "id,name,niche,brand_voice" },
             { "name": "name", "value": "=eq.{{ $json['Channel'] }}" }
-          ]
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{ $json.supabase_service_role_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $json.supabase_service_role_key }}" }
           ]
         },
         "options": {}
@@ -115,11 +109,11 @@
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
             { "name": "Prefer", "value": "return=representation" }
           ]
         },
@@ -149,11 +143,11 @@
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/job_queue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
             { "name": "Prefer", "value": "return=representation" }
           ]
         },
@@ -226,11 +220,11 @@
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/research_dossiers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
             { "name": "Prefer", "value": "return=representation" }
           ]
         },
@@ -249,11 +243,11 @@
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/job_attempts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
             { "name": "Prefer", "value": "return=representation" }
           ]
         },
@@ -272,17 +266,12 @@
       "parameters": {
         "method": "PATCH",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/job_queue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "id", "value": "=eq.{{ $('Pick Job Row').item.json.job_id }}" }
-          ]
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" }
           ]
         },
         "sendBody": true,
