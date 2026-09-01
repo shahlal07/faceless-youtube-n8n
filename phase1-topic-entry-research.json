@@ -65,7 +65,8 @@
             { "id": "2", "name": "supabase_service_role_key", "type": "string", "value": "PASTE_SUPABASE_SERVICE_ROLE_KEY_HERE" }
           ]
         },
-        "options": { "includeOtherFields": true }
+        "includeOtherFields": true,
+        "options": {}
       }
     },
     {
