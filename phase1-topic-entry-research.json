@@ -103,7 +103,7 @@
       "position": [-20, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const rows = $input.first().json;\nif (!Array.isArray(rows) || rows.length === 0) {\n  const wanted = $('Config').first().json['Channel'];\n  throw new Error(`No channel found named \"${wanted}\". It must match channels.name exactly (Islam / Geopolitics / Kids).`);\n}\nconst channel = rows[0];\nreturn [{ json: {\n  channel_id: channel.id,\n  channel_name: channel.name,\n  niche: channel.niche,\n  brand_voice: channel.brand_voice\n} }];"
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Channel'];\n  throw new Error(`No channel found named \"${wanted}\". It must match channels.name exactly (Islam / Geopolitics / Kids).`);\n}\nconst channel = items[0].json;\nreturn [{ json: {\n  channel_id: channel.id,\n  channel_name: channel.name,\n  niche: channel.niche,\n  brand_voice: channel.brand_voice\n} }];"
       }
     },
     {
@@ -137,7 +137,7 @@
       "position": [420, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const row = $input.first().json[0];\nreturn [{ json: { topic_id: row.id, topic_title: row.title } }];"
+        "jsCode": "const row = $input.first().json;\nreturn [{ json: { topic_id: row.id, topic_title: row.title } }];"
       }
     },
     {
@@ -171,7 +171,7 @@
       "position": [860, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const row = $input.first().json[0];\nreturn [{ json: { job_id: row.id, started_at: new Date().toISOString() } }];"
+        "jsCode": "const row = $input.first().json;\nreturn [{ json: { job_id: row.id, started_at: new Date().toISOString() } }];"
       }
     },
     {
@@ -192,9 +192,6 @@
       "typeVersion": 1,
       "position": [1300, 380],
       "parameters": {
-        "operation": "page",
-        "formTitle": "Run the Research Agent yourself — $0",
-        "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat (no new billing — this uses whatever access you already have, not a paid API call). Run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $json.system }}\n\n--- COPY TO HERE ---",
         "formFields": {
           "values": [
             {
@@ -204,7 +201,9 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat, run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build Research Prompt').item.json.system }}\n\n--- COPY TO HERE ---"
+        }
       }
     },
     {
