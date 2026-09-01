@@ -1,0 +1,364 @@
+{
+  "name": "Phase 4 — Assembly",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -180],
+      "parameters": {
+        "width": 500,
+        "height": 480,
+        "content": "## Assembly via Creatomate — MVP template\n\nRequires a topic with `videos.stage = 'assets_and_voice_ready'` (run Phase 3\nfirst). Renders using the \"Faceless Video MVP\" Creatomate template\n(template_id hardcoded in Build Render Request) — one background visual\n(the first approved Pexels stock shot) behind the full ElevenLabs voiceover,\nwith the topic title as a text overlay. This is NOT a per-shot edit yet —\nthat needs a more advanced dynamic template later.\n\n## Before running this\n\n1. Needs the same **Supabase account** credential as Phases 1-3, plus the\n   **Creatomate account** (Header Auth) credential wired into every HTTP\n   node that calls api.creatomate.com.\n2. Activate, open the Form Trigger's Production URL, enter the exact\n   Topic Title.\n3. This workflow requests the render, waits 20s once, then checks status\n   ONE time. If Creatomate hasn't finished by then, the video row is left\n   at `stage: 'render_requested'` with the render id noted in `render_url`\n   temporarily (a placeholder Creatomate status URL) — re-run\n   'Check Render Status' manually in the n8n editor to pick it up, or ask\n   me to add real polling later.\n4. On success: `videos.render_url` = the final MP4 URL, `duration_seconds`\n   set, `stage = 'rendered'`."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Phase 4 Entry",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — Assembly",
+        "formDescription": "Phase 4: render the final video via Creatomate for a topic with completed assets and voiceover. Enter the exact Topic Title used in Phase 1/2/3.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" },
+            { "id": "2", "name": "creatomate_template_id", "type": "string", "value": "1afae1d0-5619-414b-beab-fd3dbb33b528" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-topic",
+      "name": "Get Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,title,channel_id" },
+            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+      }
+    },
+    {
+      "id": "http-get-video",
+      "name": "Get Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,channel_id,script_id,stage" },
+            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
+            { "name": "stage", "value": "eq.assets_and_voice_ready" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-video",
+      "name": "Pick Video Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No video at stage \"assets_and_voice_ready\" found for this topic. Run Phase 3 (phase3-assets-voice.json) for this topic first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id, stage: video.stage } }];"
+      }
+    },
+    {
+      "id": "http-get-voice-track",
+      "name": "Get Voice Track",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/voice_tracks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,storage_url" },
+            { "name": "video_id", "value": "=eq.{{ $json.id }}" },
+            { "name": "order", "value": "id.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-voice-track",
+      "name": "Pick Voice Track Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No voice_tracks row found for this video — Phase 3 voiceover step did not complete.');\n}\nreturn [{ json: { storage_path: items[0].json.storage_url } }];"
+      }
+    },
+    {
+      "id": "http-sign-audio-url",
+      "name": "Sign Audio URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/storage/v1/object/sign/{{ $json.storage_path }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { expiresIn: 3600 } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-audio-url",
+      "name": "Build Audio URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0 || !items[0].json.signedURL) {\n  throw new Error('Failed to sign the voice-track Storage URL — check the Sign Audio URL node output.');\n}\nconst signedPath = items[0].json.signedURL;\nconst audioUrl = $('Config').first().json.supabase_url + '/storage/v1' + signedPath;\nreturn [{ json: { audio_url: audioUrl } }];"
+      }
+    },
+    {
+      "id": "http-get-stock-asset",
+      "name": "Get Stock Asset",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/assets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "storage_url" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').item.json.id }}" },
+            { "name": "status", "value": "eq.approved" },
+            { "name": "type", "value": "eq.stock_video" },
+            { "name": "order", "value": "shot_index.asc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-stock-asset",
+      "name": "Pick Stock Asset Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No approved stock_video asset found for this video — Phase 3 Asset Sourcing found no usable footage. Add a real asset (Firefly-generated or manually sourced) before running Assembly.');\n}\nreturn [{ json: { video_url: items[0].json.storage_url } }];"
+      }
+    },
+    {
+      "id": "code-build-render-request",
+      "name": "Build Render Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const templateId = $('Config').first().json.creatomate_template_id;\nconst audioUrl = $('Build Audio URL').first().json.audio_url;\nconst videoUrl = $json.video_url;\nconst title = $('Pick Topic Row').first().json.topic_title;\n\nreturn [{ json: {\n  template_id: templateId,\n  modifications: {\n    'Video.source': videoUrl,\n    'Audio.source': audioUrl,\n    'Title.text': title\n  }\n} }];"
+      }
+    },
+    {
+      "id": "http-create-render",
+      "name": "Create Render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2180, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.creatomate.com/v2/renders",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-render",
+      "name": "Pick Render Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Creatomate did not return a render — check the Create Render node output for an error.');\n}\nconst row = Array.isArray(items[0].json) ? items[0].json[0] : items[0].json;\nreturn [{ json: { render_id: row.id, status: row.status } }];"
+      }
+    },
+    {
+      "id": "wait-1",
+      "name": "Wait For Render",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2620, 380],
+      "parameters": {
+        "amount": 20
+      }
+    },
+    {
+      "id": "http-check-render",
+      "name": "Check Render Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2840, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.creatomate.com/v2/renders/{{ $('Pick Render Row').item.json.render_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-parse-render-result",
+      "name": "Parse Render Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3060, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const row = $input.first().json;\nconst succeeded = row.status === 'succeeded';\nreturn [{ json: {\n  succeeded,\n  status: row.status,\n  render_url: succeeded ? row.url : null,\n  duration_seconds: succeeded && row.duration ? Math.round(row.duration) : null\n} }];"
+      }
+    },
+    {
+      "id": "http-update-video",
+      "name": "Update Video Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3280, 380],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.succeeded ? { stage: 'rendered', render_url: $json.render_url, duration_seconds: $json.duration_seconds } : { stage: 'render_requested', render_url: 'https://api.creatomate.com/v2/renders/' + $('Pick Render Row').first().json.render_id } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3500, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $('Parse Render Result').first().json;\nreturn [{ json: {\n  result: result.succeeded\n    ? 'Render complete — videos.stage set to \"rendered\"'\n    : `Render still \"${result.status}\" after 20s — videos.stage set to \"render_requested\". Re-run Check Render Status manually in n8n, or wait and re-submit this form.`,\n  topic: $('Pick Topic Row').first().json.topic_title,\n  video_id: $('Pick Video Row').first().json.id,\n  render_id: $('Pick Render Row').first().json.render_id,\n  render_url: result.render_url\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Phase 4 Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
+    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Get Video", "type": "main", "index": 0 }]] },
+    "Get Video": { "main": [[{ "node": "Pick Video Row", "type": "main", "index": 0 }]] },
+    "Pick Video Row": { "main": [[{ "node": "Get Voice Track", "type": "main", "index": 0 }]] },
+    "Get Voice Track": { "main": [[{ "node": "Pick Voice Track Row", "type": "main", "index": 0 }]] },
+    "Pick Voice Track Row": { "main": [[{ "node": "Sign Audio URL", "type": "main", "index": 0 }]] },
+    "Sign Audio URL": { "main": [[{ "node": "Build Audio URL", "type": "main", "index": 0 }]] },
+    "Build Audio URL": { "main": [[{ "node": "Get Stock Asset", "type": "main", "index": 0 }]] },
+    "Get Stock Asset": { "main": [[{ "node": "Pick Stock Asset Row", "type": "main", "index": 0 }]] },
+    "Pick Stock Asset Row": { "main": [[{ "node": "Build Render Request", "type": "main", "index": 0 }]] },
+    "Build Render Request": { "main": [[{ "node": "Create Render", "type": "main", "index": 0 }]] },
+    "Create Render": { "main": [[{ "node": "Pick Render Row", "type": "main", "index": 0 }]] },
+    "Pick Render Row": { "main": [[{ "node": "Wait For Render", "type": "main", "index": 0 }]] },
+    "Wait For Render": { "main": [[{ "node": "Check Render Status", "type": "main", "index": 0 }]] },
+    "Check Render Status": { "main": [[{ "node": "Parse Render Result", "type": "main", "index": 0 }]] },
+    "Parse Render Result": { "main": [[{ "node": "Update Video Row", "type": "main", "index": 0 }]] },
+    "Update Video Row": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase4"
+  }
+}
