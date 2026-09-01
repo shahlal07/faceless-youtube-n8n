@@ -1,0 +1,326 @@
+{
+  "name": "Phase 1 — Topic Entry → Research Agent",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -80],
+      "parameters": {
+        "width": 420,
+        "height": 420,
+        "content": "## $0 by design — no Anthropic API key anywhere in this workflow\n\nThe Anthropic API has no free tier — every call bills, even a cheap one. To\nkeep this workflow at genuinely $0, it does NOT call the Anthropic API. It\nstops at Step 2 below, shows you the exact Research Agent prompt, and waits\nfor you to paste back the JSON you get from running that prompt in your own\nClaude.ai / Claude Code chat (whatever you already have access to — no new\nbilling from this step). If you later decide the cents-per-run cost of\nautomating this is worth it, wiring in `Call Anthropic — Research Agent`\nas a normal HTTP Request node is a small, reversible change.\n\n## Before running this\n\n1. Import this workflow into n8n.\n2. Open the **Config** node and paste in `supabase_service_role_key` —\n   Supabase dashboard → Project Settings → API (project ref\n   `bgzsdkzfakzwcvplfobq`). That's the only secret this workflow needs.\n3. Activate the workflow, open the Form Trigger's Production URL, submit a\n   channel + topic.\n4. On the next screen, copy the shown prompt into your own Claude chat, run\n   it, and paste the JSON response back into the field provided.\n5. The final screen shows the parsed research dossier for human review. It's\n   also written to `research_dossiers` — check it in Supabase or the dashboard.\n\n**Known rough edge:** the Supabase key lives in the Config node's plain value\nfor now, not n8n's encrypted Credentials store, so Phase 1 works end to end\ntoday. Move it into a proper n8n Header Auth credential before this workflow\n(or any like it) runs unattended — per `01-ARCHITECTURE.md`'s credentials\nsection.\n\nThis workflow only touches `topics`, `job_queue`, `job_attempts`, and\n`research_dossiers`. It does not run Story Architect, Script Writer, or\nanything past Phase 1."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Topic Entry Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — New Topic → Research Agent",
+        "formDescription": "Phase 1: enter a channel + topic, run the Research agent, and review the sourced dossier.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Channel",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "Islam" },
+                  { "option": "Geopolitics" },
+                  { "option": "Kids" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Topic Title",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Source Notes",
+              "fieldType": "textarea",
+              "requiredField": false
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" },
+            { "id": "2", "name": "supabase_service_role_key", "type": "string", "value": "PASTE_SUPABASE_SERVICE_ROLE_KEY_HERE" }
+          ]
+        },
+        "options": { "includeOtherFields": true }
+      }
+    },
+    {
+      "id": "http-get-channel",
+      "name": "Get Channel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/channels",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,name,niche,brand_voice" },
+            { "name": "name", "value": "=eq.{{ $json['Channel'] }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $json.supabase_service_role_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $json.supabase_service_role_key }}" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-channel",
+      "name": "Pick Channel Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const rows = $input.first().json;\nif (!Array.isArray(rows) || rows.length === 0) {\n  const wanted = $('Config').first().json['Channel'];\n  throw new Error(`No channel found named \"${wanted}\". It must match channels.name exactly (Islam / Geopolitics / Kids).`);\n}\nconst channel = rows[0];\nreturn [{ json: {\n  channel_id: channel.id,\n  channel_name: channel.name,\n  niche: channel.niche,\n  brand_voice: channel.brand_voice\n} }];"
+      }
+    },
+    {
+      "id": "http-insert-topic",
+      "name": "Insert Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/topics",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { channel_id: $json.channel_id, title: $('Config').item.json['Topic Title'], source_notes: $('Config').item.json['Source Notes'] || null, status: 'selected' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const row = $input.first().json[0];\nreturn [{ json: { topic_id: row.id, topic_title: row.title } }];"
+      }
+    },
+    {
+      "id": "http-create-job",
+      "name": "Create Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/job_queue",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { channel_id: $('Pick Channel Row').item.json.channel_id, job_type: 'research', payload: { topic_id: $json.topic_id }, status: 'running' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-job",
+      "name": "Pick Job Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const row = $input.first().json[0];\nreturn [{ json: { job_id: row.id, started_at: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "code-build-prompt",
+      "name": "Build Research Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst niche = $('Pick Channel Row').first().json.niche;\nconst topicTitle = $('Pick Topic Row').first().json.topic_title;\n\nconst system = `You are the Research agent. Build a sourced dossier for one topic before any script\ngets written. Nothing you produce here is treated as ground truth unless it has a status.\n\nTopic: ${topicTitle}\nChannel niche: ${niche}\n\nFor every factual claim relevant to this topic:\n1. State the claim plainly.\n2. List the source(s) — prefer primary sources (official documentation, regulatory\n   filings, court records, company statements) over secondary (news coverage) over\n   tertiary (aggregators, forums, other YouTube videos).\n3. Mark status: verified (2+ independent credible sources agree), conflicting\n   (credible sources disagree — note the disagreement, don't silently pick a side),\n   or unsupported (no credible source found — this claim gets removed, not softened).\n\nDo not fabricate a source. If you're not confident a source exists, say so and mark\nthe claim unsupported rather than inventing a plausible-sounding citation.\n\nFlag anything needing extra scrutiny: numbers, dates, named entities, geography,\nquotes attributed to real people.\n\nOutput: a dossier with all claims grouped by status, plus a short \"story potential\"\nnote — the actual narrative arc here, given what's verifiable.\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"claims\": [\n    { \"claim\": string, \"status\": \"verified\" | \"conflicting\" | \"unsupported\", \"sources\": [ { \"title\": string, \"url\": string, \"tier\": \"primary\" | \"secondary\" | \"tertiary\" } ], \"flag_for_scrutiny\": boolean }\n  ],\n  \"story_potential\": string,\n  \"dossier_status\": \"complete\" | \"needs_review\"\n}\nSet dossier_status to \"needs_review\" if too many claims came back unsupported or conflicting to responsibly proceed to scripting.`;\n\nreturn [{ json: { system, topic_title: topicTitle, input_hash: fnv1a(system) } }];"
+      }
+    },
+    {
+      "id": "form-paste-response",
+      "name": "Paste Claude Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1300, 380],
+      "parameters": {
+        "operation": "page",
+        "formTitle": "Run the Research Agent yourself — $0",
+        "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat (no new billing — this uses whatever access you already have, not a paid API call). Run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $json.system }}\n\n--- COPY TO HERE ---",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Claude's JSON response",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-parse-dossier",
+      "name": "Parse Dossier JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\n// Pasted by hand from your own Claude chat — no billed API call happened,\n// so there's no `usage` object and no per-token cost to compute here.\nconst raw = $input.first().json[\"Claude's JSON response\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\n\nconst claims = Array.isArray(parsed?.claims) ? parsed.claims : [];\nconst sources = claims.flatMap(c => Array.isArray(c.sources) ? c.sources : []);\nconst status = parseError ? 'needs_review' : (parsed?.dossier_status === 'needs_review' ? 'needs_review' : 'complete');\n\nreturn [{ json: {\n  claims,\n  sources,\n  status,\n  story_potential: parsed?.story_potential || null,\n  raw_text: raw,\n  parse_error: parseError,\n  estimated_cost: 0,\n  output_hash: fnv1a(raw)\n} }];"
+      }
+    },
+    {
+      "id": "http-insert-dossier",
+      "name": "Insert Research Dossier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1740, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/research_dossiers",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { topic_id: $('Pick Topic Row').item.json.topic_id, claims: $json.claims, sources: $json.sources, status: $json.status } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-insert-attempt",
+      "name": "Insert Job Attempt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/job_attempts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { job_id: $('Pick Job Row').item.json.job_id, attempt_no: 1, input_hash: $('Build Research Prompt').item.json.input_hash, output_hash: $('Parse Dossier JSON').item.json.output_hash, provider: 'anthropic-manual-chat', model: 'manual (Claude.ai / Claude Code, pasted by hand)', started_at: $('Pick Job Row').item.json.started_at, finished_at: new Date().toISOString(), duration_ms: Date.now() - new Date($('Pick Job Row').item.json.started_at).getTime(), estimated_cost: 0, error_code: $('Parse Dossier JSON').item.json.parse_error ? 'parse_error' : null, error_message: $('Parse Dossier JSON').item.json.parse_error } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-update-job",
+      "name": "Update Job Done",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2180, 380],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/job_queue",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Job Row').item.json.job_id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $('Config').item.json.supabase_service_role_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $('Config').item.json.supabase_service_role_key }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { status: 'done', updated_at: new Date().toISOString() } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response for Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const dossier = $('Parse Dossier JSON').first().json;\nreturn [{ json: {\n  topic: $('Pick Topic Row').first().json.topic_title,\n  channel: $('Pick Channel Row').first().json.channel_name,\n  dossier_status: dossier.status,\n  claims_verified: dossier.claims.filter(c => c.status === 'verified').length,\n  claims_conflicting: dossier.claims.filter(c => c.status === 'conflicting').length,\n  claims_unsupported: dossier.claims.filter(c => c.status === 'unsupported').length,\n  story_potential: dossier.story_potential,\n  claims: dossier.claims,\n  parse_error: dossier.parse_error || undefined,\n  raw_model_output_if_parse_failed: dossier.parse_error ? dossier.raw_text : undefined\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Topic Entry Form": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Channel", "type": "main", "index": 0 }]] },
+    "Get Channel": { "main": [[{ "node": "Pick Channel Row", "type": "main", "index": 0 }]] },
+    "Pick Channel Row": { "main": [[{ "node": "Insert Topic", "type": "main", "index": 0 }]] },
+    "Insert Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Create Job", "type": "main", "index": 0 }]] },
+    "Create Job": { "main": [[{ "node": "Pick Job Row", "type": "main", "index": 0 }]] },
+    "Pick Job Row": { "main": [[{ "node": "Build Research Prompt", "type": "main", "index": 0 }]] },
+    "Build Research Prompt": { "main": [[{ "node": "Paste Claude Response", "type": "main", "index": 0 }]] },
+    "Paste Claude Response": { "main": [[{ "node": "Parse Dossier JSON", "type": "main", "index": 0 }]] },
+    "Parse Dossier JSON": { "main": [[{ "node": "Insert Research Dossier", "type": "main", "index": 0 }]] },
+    "Insert Research Dossier": { "main": [[{ "node": "Insert Job Attempt", "type": "main", "index": 0 }]] },
+    "Insert Job Attempt": { "main": [[{ "node": "Update Job Done", "type": "main", "index": 0 }]] },
+    "Update Job Done": { "main": [[{ "node": "Format Response for Review", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase1"
+  }
+}
