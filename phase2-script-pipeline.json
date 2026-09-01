@@ -1,0 +1,462 @@
+{
+  "name": "Phase 2 — Script Pipeline",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -140],
+      "parameters": {
+        "width": 460,
+        "height": 480,
+        "content": "## $0 by design — same pattern as Phase 1\n\nNo Anthropic API key here either. Three separate steps (Story Architect,\nScript Writer, Script Critic) each pause on a form page showing you the exact\nprompt to copy into your own Claude.ai / Claude Code chat, then wait for you\nto paste back the response.\n\n## Before running this\n\n1. Requires a topic that already has a **completed Phase 1 research dossier**\n   — run `phase1-topic-entry-research.json` for this topic first.\n2. Reuses the same **Supabase API** credential from Phase 1. Import this\n   workflow, open each of the 7 HTTP Request nodes, and set Authentication →\n   Predefined Credential Type → Supabase API → your existing credential.\n3. Activate, open the Form Trigger's Production URL, enter the exact Topic\n   Title from Phase 1 and a target runtime in minutes.\n4. Copy/paste three times: Story Architect outline → Script Writer draft →\n   Script Critic score. Each writes a row to `scripts` (stage: architect →\n   draft → critiqued → final), matching the schema in\n   `02-DATABASE-SCHEMA.sql`.\n5. If the Critic scores below 7 on any dimension, the run stops at\n   `critiqued` with `needs_human` on the job — no `videos` row gets created.\n   Revise the script by hand (or re-run Script Writer in your own Claude chat\n   with the Critic's notes) and re-submit this form to try again. This\n   workflow does not auto-loop the rework — you're the loop, same as every\n   other step here.\n6. On a pass, a `final` script row is written and a `videos` row is created\n   (`stage: script_ready`) — that's the handoff point for Phase 3.\n\nThis workflow does not run Topic Discovery (Agent #1) — it assumes you\nalready picked the topic manually via Phase 1."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Script Pipeline Entry",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — Script Pipeline",
+        "formDescription": "Phase 2: turn a completed research dossier into a critic-approved script. Enter the exact Topic Title used in Phase 1.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true },
+            { "fieldLabel": "Target Runtime Minutes", "fieldType": "number", "requiredField": true }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-topic",
+      "name": "Get Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,title,channel_id" },
+            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+      }
+    },
+    {
+      "id": "http-get-dossier",
+      "name": "Get Dossier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/research_dossiers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,claims,status" },
+            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-dossier",
+      "name": "Pick Dossier Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No research dossier found for this topic. Run Phase 1 (phase1-topic-entry-research.json) for this topic first.');\n}\nconst dossier = items[0].json;\nconst claims = Array.isArray(dossier.claims) ? dossier.claims : [];\nconst usableClaims = claims.filter(c => c.status === 'verified' || c.status === 'conflicting');\nif (usableClaims.length === 0) {\n  throw new Error('This dossier has no verified or conflicting claims to build a script from — it needs more research first.');\n}\nreturn [{ json: { dossier_id: dossier.id, usable_claims: usableClaims } }];"
+      }
+    },
+    {
+      "id": "http-get-channel",
+      "name": "Get Channel Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,name,niche,brand_voice" },
+            { "name": "id", "value": "=eq.{{ $('Pick Topic Row').item.json.channel_id }}" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-channel",
+      "name": "Pick Channel Info Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Channel not found for this topic — data inconsistency, check the topics/channels tables.');\n}\nconst channel = items[0].json;\nreturn [{ json: { brand_voice: channel.brand_voice, niche: channel.niche } }];"
+      }
+    },
+    {
+      "id": "code-build-architect-prompt",
+      "name": "Build Story Architect Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst claims = $('Pick Dossier Row').first().json.usable_claims;\nconst minutes = $('Config').first().json['Target Runtime Minutes'];\nconst dossierText = JSON.stringify(claims, null, 2);\n\nconst system = `You are the Story Architect. You do not write narration — you build the structural\narc a script will follow.\n\nDossier: ${dossierText}\nTarget runtime: ${minutes} minutes\n\nBuild an outline with these beats:\n- HOOK: the single most surprising or tension-creating fact from the dossier, framed\n  as a question or incomplete thought\n- PROBLEM: what's actually at stake or unresolved\n- CONTEXT: the minimum background a viewer needs, no more\n- ESCALATION: how the situation or stakes build\n- SURPRISE: the turn — something the viewer didn't expect, grounded in a verified claim\n- EXPLANATION: the payoff — how/why, using the dossier's strongest verified material\n- PAYOFF: what this means, why it matters, or what happens next\n\nAllocate approximate seconds per beat. Every beat must cite which dossier claim(s) it\nuses — if a beat has no dossier support, cut it or flag it for more research.\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"beats\": [\n    { \"beat\": \"HOOK\" | \"PROBLEM\" | \"CONTEXT\" | \"ESCALATION\" | \"SURPRISE\" | \"EXPLANATION\" | \"PAYOFF\", \"seconds\": number, \"summary\": string, \"cited_claims\": [string] }\n  ]\n}`;\n\nreturn [{ json: { system, input_hash: fnv1a(system) } }];"
+      }
+    },
+    {
+      "id": "form-paste-architect",
+      "name": "Paste Story Architect Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1300, 380],
+      "parameters": {
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Claude's outline JSON", "fieldType": "textarea", "requiredField": true }
+          ]
+        },
+        "options": {
+          "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat, run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build Story Architect Prompt').item.json.system }}\n\n--- COPY TO HERE ---"
+        }
+      }
+    },
+    {
+      "id": "code-parse-outline",
+      "name": "Parse Outline JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json[\"Claude's outline JSON\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\nif (parseError || !Array.isArray(parsed?.beats) || parsed.beats.length === 0) {\n  throw new Error('Could not parse a valid outline JSON (needs a non-empty \"beats\" array). Paste error: ' + (parseError || 'no beats array found'));\n}\nreturn [{ json: { beats: parsed.beats, raw_text: raw } }];"
+      }
+    },
+    {
+      "id": "http-insert-script-architect",
+      "name": "Insert Script — Architect Stage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1740, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { topic_id: $('Pick Topic Row').item.json.topic_id, version: 1, stage: 'architect', content: JSON.stringify($json.beats, null, 2) } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-writer-prompt",
+      "name": "Build Script Writer Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst brandVoice = $('Pick Channel Info Row').first().json.brand_voice;\nconst outline = $('Parse Outline JSON').first().json.beats;\nconst outlineText = JSON.stringify(outline, null, 2);\n\nconst system = `You are the Script Writer. Turn the story outline into narration written for\nvoiceover — no on-camera presence, no visual-dependent phrasing like \"as you can see\nhere\" unless a shot is specifically planned for that moment.\n\nVoice: ${brandVoice}\nOutline: ${outlineText}\n\nRules:\n- Sentences built for the ear, not the eye — shorter and more rhythmic than page prose.\n- No filler transitions (\"moving on\", \"so anyway\"). Cut straight into the next beat.\n- Every factual statement must match a dossier claim — don't round up, don't add\n  color that isn't sourced.\n- Vary sentence length deliberately — short for emphasis and impact, longer for\n  context and explanation.\n\nOutput the full script labeled [HOOK] [PROBLEM] [CONTEXT] [ESCALATION] [SURPRISE]\n[EXPLANATION] [PAYOFF], with estimated word count and runtime per section\n(150 words ~= 60 seconds at natural pace). Plain text, not JSON.`;\n\nreturn [{ json: { system, input_hash: fnv1a(system) } }];"
+      }
+    },
+    {
+      "id": "form-paste-writer",
+      "name": "Paste Script Writer Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [2180, 380],
+      "parameters": {
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Claude's script text", "fieldType": "textarea", "requiredField": true }
+          ]
+        },
+        "options": {
+          "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat, run it, then paste the full script text back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build Script Writer Prompt').item.json.system }}\n\n--- COPY TO HERE ---"
+        }
+      }
+    },
+    {
+      "id": "http-insert-script-draft",
+      "name": "Insert Script — Draft Stage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { topic_id: $('Pick Topic Row').item.json.topic_id, version: 1, stage: 'draft', content: $json[\"Claude's script text\"] } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-critic-prompt",
+      "name": "Build Script Critic Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2620, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst script = $('Paste Script Writer Response').first().json[\"Claude's script text\"];\n\nconst system = `You are the Script Critic. You did not write this script — attack it.\n\nScript: ${script}\n\nAnswer directly, don't soften:\n1. Where would a viewer actually leave? Name the timestamp/section.\n2. What's boring? What could be cut entirely with no loss?\n3. Is the hook (first ~15 seconds) strong enough to survive the algorithm's\n   swipe-away window? If not, why not?\n4. Any claim that reads like it's not actually backed by the dossier, even if\n   technically sourced — does it feel like padding or an unsupported leap?\n5. Does the payoff actually pay off, or does it fizzle?\n\nScore 1-10 on hook strength, pacing, and payoff satisfaction. A script under 7 on\nany dimension goes back to the writer with your specific notes — exact lines and\nwhat's wrong with them, not general feedback like \"make it better.\"\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"hook_score\": number,\n  \"pacing_score\": number,\n  \"payoff_score\": number,\n  \"weak_points\": [ { \"timestamp_or_section\": string, \"issue\": string } ],\n  \"notes\": string\n}`;\n\nreturn [{ json: { system, input_hash: fnv1a(system) } }];"
+      }
+    },
+    {
+      "id": "form-paste-critic",
+      "name": "Paste Script Critic Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [2840, 380],
+      "parameters": {
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Claude's critique JSON", "fieldType": "textarea", "requiredField": true }
+          ]
+        },
+        "options": {
+          "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat, run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build Script Critic Prompt').item.json.system }}\n\n--- COPY TO HERE ---"
+        }
+      }
+    },
+    {
+      "id": "code-parse-critic",
+      "name": "Parse Critic JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3060, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst raw = $input.first().json[\"Claude's critique JSON\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\nif (parseError) {\n  throw new Error('Could not parse the critique JSON: ' + parseError);\n}\n\nconst hook = Number(parsed.hook_score);\nconst pacing = Number(parsed.pacing_score);\nconst payoff = Number(parsed.payoff_score);\nconst pass = hook >= 7 && pacing >= 7 && payoff >= 7;\n\nreturn [{ json: {\n  hook_score: hook,\n  pacing_score: pacing,\n  payoff_score: payoff,\n  weak_points: parsed.weak_points || [],\n  notes: parsed.notes || '',\n  pass,\n  raw_text: raw,\n  output_hash: fnv1a(raw)\n} }];"
+      }
+    },
+    {
+      "id": "http-insert-script-critiqued",
+      "name": "Insert Script — Critiqued Stage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3280, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { topic_id: $('Pick Topic Row').item.json.topic_id, version: 1, stage: 'critiqued', content: $('Paste Script Writer Response').item.json[\"Claude's script text\"], critic_notes: JSON.stringify({ hook_score: $json.hook_score, pacing_score: $json.pacing_score, payoff_score: $json.payoff_score, weak_points: $json.weak_points, notes: $json.notes }) } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "if-critic-passed",
+      "name": "Critic Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3500, 380],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $('Parse Critic JSON').item.json.pass }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-insert-script-final",
+      "name": "Insert Script — Final Stage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3720, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { topic_id: $('Pick Topic Row').item.json.topic_id, version: 1, stage: 'final', content: $('Paste Script Writer Response').item.json[\"Claude's script text\"] } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-final-script",
+      "name": "Pick Final Script Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3940, 260],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const row = $input.first().json;\nreturn [{ json: { script_id: row.id } }];"
+      }
+    },
+    {
+      "id": "http-insert-video",
+      "name": "Insert Video Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4160, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { channel_id: $('Pick Topic Row').item.json.channel_id, topic_id: $('Pick Topic Row').item.json.topic_id, script_id: $json.script_id, stage: 'script_ready', status: 'in_progress' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-pass",
+      "name": "Format Pass Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4380, 260],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const critic = $('Parse Critic JSON').first().json;\nreturn [{ json: {\n  result: 'PASSED — script is final, video row created for Phase 3',\n  topic: $('Pick Topic Row').first().json.topic_title,\n  hook_score: critic.hook_score,\n  pacing_score: critic.pacing_score,\n  payoff_score: critic.payoff_score,\n  video_id: $('Insert Video Row').first().json.id,\n  script_id: $('Pick Final Script Row').first().json.script_id\n} }];"
+      }
+    },
+    {
+      "id": "code-format-rework",
+      "name": "Format Rework Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3720, 500],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const critic = $('Parse Critic JSON').first().json;\nreturn [{ json: {\n  result: 'NEEDS REWORK — no video row created. Revise the script using the notes below (by hand, or by re-running the Script Writer prompt in your own Claude chat with these notes appended), then re-submit this form to try again.',\n  topic: $('Pick Topic Row').first().json.topic_title,\n  hook_score: critic.hook_score,\n  pacing_score: critic.pacing_score,\n  payoff_score: critic.payoff_score,\n  weak_points: critic.weak_points,\n  notes: critic.notes\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Script Pipeline Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
+    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Get Dossier", "type": "main", "index": 0 }]] },
+    "Get Dossier": { "main": [[{ "node": "Pick Dossier Row", "type": "main", "index": 0 }]] },
+    "Pick Dossier Row": { "main": [[{ "node": "Get Channel Info", "type": "main", "index": 0 }]] },
+    "Get Channel Info": { "main": [[{ "node": "Pick Channel Info Row", "type": "main", "index": 0 }]] },
+    "Pick Channel Info Row": { "main": [[{ "node": "Build Story Architect Prompt", "type": "main", "index": 0 }]] },
+    "Build Story Architect Prompt": { "main": [[{ "node": "Paste Story Architect Response", "type": "main", "index": 0 }]] },
+    "Paste Story Architect Response": { "main": [[{ "node": "Parse Outline JSON", "type": "main", "index": 0 }]] },
+    "Parse Outline JSON": { "main": [[{ "node": "Insert Script — Architect Stage", "type": "main", "index": 0 }]] },
+    "Insert Script — Architect Stage": { "main": [[{ "node": "Build Script Writer Prompt", "type": "main", "index": 0 }]] },
+    "Build Script Writer Prompt": { "main": [[{ "node": "Paste Script Writer Response", "type": "main", "index": 0 }]] },
+    "Paste Script Writer Response": { "main": [[{ "node": "Insert Script — Draft Stage", "type": "main", "index": 0 }]] },
+    "Insert Script — Draft Stage": { "main": [[{ "node": "Build Script Critic Prompt", "type": "main", "index": 0 }]] },
+    "Build Script Critic Prompt": { "main": [[{ "node": "Paste Script Critic Response", "type": "main", "index": 0 }]] },
+    "Paste Script Critic Response": { "main": [[{ "node": "Parse Critic JSON", "type": "main", "index": 0 }]] },
+    "Parse Critic JSON": { "main": [[{ "node": "Insert Script — Critiqued Stage", "type": "main", "index": 0 }]] },
+    "Insert Script — Critiqued Stage": { "main": [[{ "node": "Critic Passed?", "type": "main", "index": 0 }]] },
+    "Critic Passed?": {
+      "main": [
+        [{ "node": "Insert Script — Final Stage", "type": "main", "index": 0 }],
+        [{ "node": "Format Rework Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Script — Final Stage": { "main": [[{ "node": "Pick Final Script Row", "type": "main", "index": 0 }]] },
+    "Pick Final Script Row": { "main": [[{ "node": "Insert Video Row", "type": "main", "index": 0 }]] },
+    "Insert Video Row": { "main": [[{ "node": "Format Pass Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase2"
+  }
+}
