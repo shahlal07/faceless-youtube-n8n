@@ -6,11 +6,14 @@
       "name": "Setup notes",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-680, -180],
+      "position": [
+        -680,
+        -180
+      ],
       "parameters": {
-        "width": 500,
-        "height": 560,
-        "content": "## Real APIs this time — no copy/paste\n\nUnlike Phase 1/2, this workflow calls real provider APIs directly. No manual\nClaude-chat steps except the Visual Director stage (a creative-direction step,\nkept human-in-the-loop on purpose).\n\n## Before running this\n\n1. Requires a topic with a **Phase 2 final script** already written (a `videos`\n   row at `stage: 'script_ready'`).\n2. Needs 3 credentials created in n8n → Credentials, then wired into this\n   workflow's HTTP nodes (Authentication → Predefined Credential Type):\n   - **Supabase account** (Supabase API) — same one from Phase 1/2\n   - **ElevenLabs account** (Header Auth, header name `xi-api-key`)\n   - **Pexels account** (Header Auth, header name `Authorization`, raw key,\n     no \"Bearer\" prefix)\n3. Activate, open the Form Trigger's Production URL, enter the exact Topic\n   Title from Phase 1/2.\n4. Copy/paste once: Visual Director shot list. Everything after that\n   (voiceover generation, stock footage sourcing) runs automatically.\n\n## What this workflow does NOT do yet\n\n- **Assembly (Creatomate)** is not wired in — it needs a `template_id` from a\n  template built in Creatomate's own editor first. Add it once that exists.\n- **AI-generated visuals (Adobe Firefly Services)** aren't wired in either —\n  pending Firefly Services API access. Shots with `asset_type` other than\n  `stock_video` get a placeholder `assets` row (`status: 'pending'`) instead\n  of a real asset, so nothing silently disappears from tracking.\n- No channel has a locked-in `tts_voice_id` yet (see `04-CHANNEL-CONFIG.md`\n  step 4) — this workflow falls back to ElevenLabs' premade \"Rachel\" voice\n  until you set one per channel.\n\nEnds at `videos.stage = 'assets_and_voice_ready'` — the handoff point for\nAssembly once Creatomate is ready."
+        "width": 560,
+        "height": 940,
+        "content": "## Real APIs this time — no copy/paste\n\nUnlike Phase 1/2, this workflow calls real provider APIs directly. No manual\nClaude-chat steps except the Visual Director stage (a creative-direction step,\nkept human-in-the-loop on purpose).\n\n## Before running this\n\n1. Requires a topic with a **Phase 2 final script** already written (a `videos`\n   row at `stage: 'script_ready'`).\n2. Needs 3 credentials created in n8n → Credentials, then wired into this\n   workflow's HTTP nodes (Authentication → Predefined Credential Type):\n   - **Supabase account** (Supabase API) — same one from Phase 1/2\n   - **ElevenLabs account** (Header Auth, header name `xi-api-key`)\n   - **Pexels account** (Header Auth, header name `Authorization`, raw key,\n     no \"Bearer\" prefix)\n   - Pollinations.ai needs no credential at all — it's a keyless public API.\n3. Needs a **public** Supabase Storage bucket named `generated-assets`\n   (Storage → New bucket → \"Public bucket\" on) — create it once before\n   running. AI images are uploaded there and referenced by their public URL\n   so Phase 4 can hand that URL straight to Creatomate, same as Pexels URLs.\n4. Activate, open the Form Trigger's Production URL, enter the exact Topic\n   Title from Phase 1/2.\n5. Copy/paste once: Visual Director shot list. Everything after that\n   (voiceover generation, stock footage sourcing, AI image generation) runs\n   automatically.\n\n## AI-generated visuals — Pollinations.ai, not Adobe Firefly\n\nAdobe Firefly Services access was never obtained. `ai_image` shots instead\ncall **Pollinations.ai** (`image.pollinations.ai/prompt/<description>`) —\nfree, keyless, no signup, one GET request. The shot description is used\nverbatim as the prompt; the image is uploaded to `generated-assets` and the\nresulting `assets` row is marked `status: 'approved'` automatically. Nobody\nhas actually looked at these images before they're marked approved — that's\na real gap worth a human spot-check pass before a video with AI images ships,\nsame concern the QC Agent (Phase 5) is supposed to catch under VISUAL.\n\n**Still just a placeholder** (`status: 'pending'`, no free option wired):\n- `ai_video` — no free AI video generator exists at usable quality; would\n  need either paid API access or a Ken-Burns pan/zoom over a still image.\n- `chart` / `map` — QuickChart.io could render these for free, but only from\n  real data. Nothing upstream extracts verified numbers from the research\n  dossier into chartable form yet, and fabricating a chart's numbers would\n  violate this project's own no-invented-data rule. Wire this once there's\n  a real data source to chart.\n\n## What this workflow does NOT do yet\n\n- **Assembly (Creatomate)** is not wired in — it needs a `template_id` from a\n  template built in Creatomate's own editor first. Add it once that exists.\n- No channel has a locked-in `tts_voice_id` yet (see `04-CHANNEL-CONFIG.md`\n  step 4) — this workflow falls back to ElevenLabs' premade \"Rachel\" voice\n  until you set one per channel.\n\nEnds at `videos.stage = 'assets_and_voice_ready'` — the handoff point for\nAssembly once Creatomate is ready."
       }
     },
     {
@@ -18,13 +21,20 @@
       "name": "Phase 3 Entry",
       "type": "n8n-nodes-base.formTrigger",
       "typeVersion": 2.2,
-      "position": [-680, 420],
+      "position": [
+        -680,
+        420
+      ],
       "parameters": {
         "formTitle": "Faceless YouTube Studio — Assets & Voiceover",
         "formDescription": "Phase 3: generate a shot list, source stock footage, and generate a voiceover for a topic with a completed Phase 2 script. Enter the exact Topic Title used in Phase 1/2.",
         "formFields": {
           "values": [
-            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true }
+            {
+              "fieldLabel": "Topic Title",
+              "fieldType": "text",
+              "requiredField": true
+            }
           ]
         },
         "responseMode": "lastNode",
@@ -36,11 +46,19 @@
       "name": "Config",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [-460, 420],
+      "position": [
+        -460,
+        420
+      ],
       "parameters": {
         "assignments": {
           "assignments": [
-            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+            {
+              "id": "1",
+              "name": "supabase_url",
+              "type": "string",
+              "value": "https://bgzsdkzfakzwcvplfobq.supabase.co"
+            }
           ]
         },
         "includeOtherFields": true,
@@ -52,7 +70,10 @@
       "name": "Get Topic",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-240, 420],
+      "position": [
+        -240,
+        420
+      ],
       "parameters": {
         "method": "GET",
         "url": "={{ $json.supabase_url }}/rest/v1/topics",
@@ -61,10 +82,22 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "select", "value": "id,title,channel_id" },
-            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
-            { "name": "order", "value": "created_at.desc" },
-            { "name": "limit", "value": "1" }
+            {
+              "name": "select",
+              "value": "id,title,channel_id"
+            },
+            {
+              "name": "title",
+              "value": "=eq.{{ $json['Topic Title'] }}"
+            },
+            {
+              "name": "order",
+              "value": "created_at.desc"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
           ]
         },
         "options": {}
@@ -75,7 +108,10 @@
       "name": "Pick Topic Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-20, 420],
+      "position": [
+        -20,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
@@ -86,7 +122,10 @@
       "name": "Get Video",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [200, 420],
+      "position": [
+        200,
+        420
+      ],
       "parameters": {
         "method": "GET",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/videos",
@@ -95,11 +134,26 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "select", "value": "id,channel_id,script_id,stage" },
-            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
-            { "name": "stage", "value": "eq.script_ready" },
-            { "name": "order", "value": "created_at.desc" },
-            { "name": "limit", "value": "1" }
+            {
+              "name": "select",
+              "value": "id,channel_id,script_id,stage"
+            },
+            {
+              "name": "topic_id",
+              "value": "=eq.{{ $json.topic_id }}"
+            },
+            {
+              "name": "stage",
+              "value": "eq.script_ready"
+            },
+            {
+              "name": "order",
+              "value": "created_at.desc"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
           ]
         },
         "options": {}
@@ -110,7 +164,10 @@
       "name": "Pick Video Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 420],
+      "position": [
+        420,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No video at stage \"script_ready\" found for this topic. Run Phase 2 (phase2-script-pipeline.json) for this topic first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id, stage: video.stage } }];"
@@ -121,7 +178,10 @@
       "name": "Get Final Script",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [640, 420],
+      "position": [
+        640,
+        420
+      ],
       "parameters": {
         "method": "GET",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
@@ -130,8 +190,14 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "select", "value": "id,content,topic_id" },
-            { "name": "id", "value": "=eq.{{ $json.script_id }}" }
+            {
+              "name": "select",
+              "value": "id,content,topic_id"
+            },
+            {
+              "name": "id",
+              "value": "=eq.{{ $json.script_id }}"
+            }
           ]
         },
         "options": {}
@@ -142,7 +208,10 @@
       "name": "Pick Script Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [860, 420],
+      "position": [
+        860,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Final script row not found — data inconsistency between videos.script_id and scripts.');\n}\nconst row = items[0].json;\nreturn [{ json: { script_id: row.id, content: row.content } }];"
@@ -153,7 +222,10 @@
       "name": "Get Channel",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1080, 420],
+      "position": [
+        1080,
+        420
+      ],
       "parameters": {
         "method": "GET",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/channels",
@@ -162,8 +234,14 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "select", "value": "id,name,visual_style_notes,tts_voice_id,made_for_kids" },
-            { "name": "id", "value": "=eq.{{ $('Pick Video Row').item.json.channel_id }}" }
+            {
+              "name": "select",
+              "value": "id,name,visual_style_notes,tts_voice_id,made_for_kids"
+            },
+            {
+              "name": "id",
+              "value": "=eq.{{ $('Pick Video Row').item.json.channel_id }}"
+            }
           ]
         },
         "options": {}
@@ -174,7 +252,10 @@
       "name": "Pick Channel Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1300, 420],
+      "position": [
+        1300,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Channel not found — data inconsistency, check the topics/channels tables.');\n}\nconst c = items[0].json;\nreturn [{ json: { channel_id: c.id, name: c.name, visual_style_notes: c.visual_style_notes, tts_voice_id: c.tts_voice_id, made_for_kids: c.made_for_kids } }];"
@@ -185,7 +266,10 @@
       "name": "Build Visual Director Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1520, 420],
+      "position": [
+        1520,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "function fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = Math.imul(h, 0x01000193);\n  }\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\n\nconst script = $('Pick Script Row').first().json.content;\nconst visualStyle = $('Pick Channel Row').first().json.visual_style_notes;\n\nconst system = `You are the Visual Director. Turn the finished script into a timestamped shot list.\n\nScript: ${script}\nVisual style for this channel: ${visualStyle}\n\nFor every ~5-10 second segment, specify:\n- Timestamp range\n- What's on screen — be specific: \"satellite constellation animation, Earth\n  curvature visible\", not \"relevant footage\"\n- Asset type: ai_image | ai_video | stock_video | chart | map | screen_recording\n- If it's a map, chart, or flag: flag it explicitly for a fact-check pass — wrong\n  borders or flags are the most common embarrassing visual error\n\nAvoid repeating the same visual for more than ~15 consecutive seconds — the editing\nQC pass will fail static or repetitive visuals.\n\nDon't use real, identifiable people's likenesses unless they're a public figure\ncentral to the story and the footage is properly licensed news/archival material —\nflag this explicitly so Asset Sourcing verifies licensing.\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"shots\": [\n    { \"start_seconds\": number, \"end_seconds\": number, \"description\": string, \"asset_type\": \"ai_image\" | \"ai_video\" | \"stock_video\" | \"chart\" | \"map\" | \"screen_recording\", \"fact_check_needed\": boolean }\n  ]\n}`;\n\nreturn [{ json: { system, input_hash: fnv1a(system) } }];"
@@ -196,11 +280,18 @@
       "name": "Paste Visual Director Response",
       "type": "n8n-nodes-base.form",
       "typeVersion": 1,
-      "position": [1740, 420],
+      "position": [
+        1740,
+        420
+      ],
       "parameters": {
         "formFields": {
           "values": [
-            { "fieldLabel": "Claude's shot list JSON", "fieldType": "textarea", "requiredField": true }
+            {
+              "fieldLabel": "Claude's shot list JSON",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
           ]
         },
         "options": {
@@ -213,7 +304,10 @@
       "name": "Parse Shot List JSON",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1960, 420],
+      "position": [
+        1960,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const raw = $input.first().json[\"Claude's shot list JSON\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\nif (parseError || !Array.isArray(parsed?.shots) || parsed.shots.length === 0) {\n  throw new Error('Could not parse a valid shot list JSON (needs a non-empty \"shots\" array). Paste error: ' + (parseError || 'no shots array found'));\n}\nreturn [{ json: { shots: parsed.shots, raw_text: raw } }];"
@@ -224,7 +318,10 @@
       "name": "Insert Shot List",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2180, 420],
+      "position": [
+        2180,
+        420
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/shot_lists",
@@ -233,7 +330,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Prefer", "value": "return=representation" }
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
           ]
         },
         "sendBody": true,
@@ -247,7 +347,10 @@
       "name": "Pick Shot List Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2400, 420],
+      "position": [
+        2400,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Shot list insert failed — no row returned.');\n}\nconst row = items[0].json;\nreturn [{ json: { shot_list_id: row.id, shots: row.shots } }];"
@@ -258,7 +361,10 @@
       "name": "Split Out Shots",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2620, 420],
+      "position": [
+        2620,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const shots = $('Pick Shot List Row').first().json.shots;\nconst videoId = $('Pick Video Row').first().json.id;\nreturn shots.map((shot, idx) => ({\n  json: {\n    video_id: videoId,\n    shot_index: idx,\n    description: shot.description,\n    asset_type: shot.asset_type,\n    start_seconds: shot.start_seconds,\n    end_seconds: shot.end_seconds,\n    fact_check_needed: !!shot.fact_check_needed\n  },\n  pairedItem: { item: 0 }\n}));"
@@ -269,16 +375,26 @@
       "name": "Is Stock Video Shot?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [2840, 420],
+      "position": [
+        2840,
+        420
+      ],
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "cond-1",
               "leftValue": "={{ $json.asset_type }}",
               "rightValue": "stock_video",
-              "operator": { "type": "string", "operation": "equals" }
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
           ],
           "combinator": "and"
@@ -291,7 +407,10 @@
       "name": "Search Pexels",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3060, 300],
+      "position": [
+        3060,
+        300
+      ],
       "parameters": {
         "method": "GET",
         "url": "https://api.pexels.com/videos/search",
@@ -300,9 +419,18 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "query", "value": "={{ $json.description }}" },
-            { "name": "per_page", "value": "3" },
-            { "name": "orientation", "value": "landscape" }
+            {
+              "name": "query",
+              "value": "={{ $json.description }}"
+            },
+            {
+              "name": "per_page",
+              "value": "3"
+            },
+            {
+              "name": "orientation",
+              "value": "landscape"
+            }
           ]
         },
         "options": {}
@@ -313,7 +441,10 @@
       "name": "Pick Top Pexels Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3280, 300],
+      "position": [
+        3280,
+        300
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const shotData = $('Split Out Shots').item.json;\nconst resp = $input.first().json;\nconst videos = Array.isArray(resp.videos) ? resp.videos : [];\nlet fileUrl = null;\nif (videos.length > 0) {\n  const files = videos[0].video_files || [];\n  const hd = files.find(f => f.quality === 'hd') || files[0];\n  fileUrl = hd ? hd.link : null;\n}\nreturn [{ json: {\n  video_id: shotData.video_id,\n  shot_index: shotData.shot_index,\n  asset_type: shotData.asset_type,\n  storage_url: fileUrl,\n  found: !!fileUrl\n} }];"
@@ -324,7 +455,10 @@
       "name": "Insert Stock Asset Row",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3500, 300],
+      "position": [
+        3500,
+        300
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/assets",
@@ -333,7 +467,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Prefer", "value": "return=representation" }
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
           ]
         },
         "sendBody": true,
@@ -347,7 +484,10 @@
       "name": "Insert Placeholder Asset Row",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3060, 560],
+      "position": [
+        3280,
+        700
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/assets",
@@ -356,12 +496,15 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Prefer", "value": "return=representation" }
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { video_id: $json.video_id, shot_index: $json.shot_index, type: $json.asset_type, storage_url: null, license_note: 'Awaiting AI generation — Adobe Firefly Services not yet connected', status: 'pending' } }}",
+        "jsonBody": "={{ { video_id: $json.video_id, shot_index: $json.shot_index, type: $json.asset_type, storage_url: null, license_note: 'No free/verified-data generator wired for asset type '' + $json.asset_type + '' yet — ai_video has no viable free option, chart/map need real verified data, not fabricated numbers', status: 'pending' } }}",
         "options": {}
       }
     },
@@ -370,10 +513,13 @@
       "name": "Merge Asset Branches",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [3720, 420],
+      "position": [
+        4160,
+        420
+      ],
       "parameters": {
         "mode": "append",
-        "numberInputs": 2
+        "numberInputs": 3
       }
     },
     {
@@ -381,7 +527,10 @@
       "name": "Collapse After Assets",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3940, 420],
+      "position": [
+        4380,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const items = $input.all();\nreturn [{ json: { assets_inserted: items.length } }];"
@@ -392,7 +541,10 @@
       "name": "Build Voiceover Text",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [4160, 420],
+      "position": [
+        4600,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "const scriptRaw = $('Pick Script Row').first().json.content;\nconst cleaned = scriptRaw\n  .replace(/\\[[A-Z]+\\]\\s*(\\(~?\\d+s,?\\s*\\d*\\s*words?\\))?/g, '')\n  .replace(/\\n{2,}/g, '\\n\\n')\n  .trim();\nconst channel = $('Pick Channel Row').first().json;\n// ElevenLabs premade \"Rachel\" voice — fallback until a channel voice is locked in per 04-CHANNEL-CONFIG.md\nconst voiceId = channel.tts_voice_id || '21m00Tcm4TlvDq8ikWAM';\nreturn [{ json: { voiceover_text: cleaned, voice_id: voiceId } }];"
@@ -403,7 +555,10 @@
       "name": "Generate Voiceover",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [4380, 420],
+      "position": [
+        4820,
+        420
+      ],
       "parameters": {
         "method": "POST",
         "url": "=https://api.elevenlabs.io/v1/text-to-speech/{{ $json.voice_id }}",
@@ -412,7 +567,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -433,7 +591,10 @@
       "name": "Upload Voice To Storage",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [4600, 420],
+      "position": [
+        5040,
+        420
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').first().json.supabase_url }}/storage/v1/object/voice-tracks/{{ $('Pick Video Row').first().json.id }}.mp3",
@@ -442,8 +603,14 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "audio/mpeg" },
-            { "name": "x-upsert", "value": "true" }
+            {
+              "name": "Content-Type",
+              "value": "audio/mpeg"
+            },
+            {
+              "name": "x-upsert",
+              "value": "true"
+            }
           ]
         },
         "sendBody": true,
@@ -457,7 +624,10 @@
       "name": "Insert Voice Track",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [4820, 420],
+      "position": [
+        5260,
+        420
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/voice_tracks",
@@ -466,7 +636,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Prefer", "value": "return=representation" }
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
           ]
         },
         "sendBody": true,
@@ -480,7 +653,10 @@
       "name": "Update Video Stage",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [5040, 420],
+      "position": [
+        5480,
+        420
+      ],
       "parameters": {
         "method": "PATCH",
         "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
@@ -489,13 +665,19 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+            {
+              "name": "id",
+              "value": "=eq.{{ $('Pick Video Row').first().json.id }}"
+            }
           ]
         },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Prefer", "value": "return=representation" }
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
           ]
         },
         "sendBody": true,
@@ -509,47 +691,524 @@
       "name": "Format Pass Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [5260, 420],
+      "position": [
+        5700,
+        420
+      ],
       "parameters": {
         "language": "javaScript",
         "jsCode": "return [{ json: {\n  result: 'Phase 3 (assets + voiceover) complete — stage set to assets_and_voice_ready. Assembly (Creatomate) not yet wired; run it manually once the template_id is ready.',\n  topic: $('Pick Topic Row').first().json.topic_title,\n  video_id: $('Pick Video Row').first().json.id,\n  shot_list_id: $('Pick Shot List Row').first().json.shot_list_id,\n  shots_processed: $('Split Out Shots').all().length,\n  voice_track_storage_url: 'voice-tracks/' + $('Pick Video Row').first().json.id + '.mp3'\n} }];"
       }
+    },
+    {
+      "id": "if-is-ai-image",
+      "name": "Is AI Image Shot?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3060,
+        560
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-ai-image",
+              "leftValue": "={{ $json.asset_type }}",
+              "rightValue": "ai_image",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-build-pollinations-url",
+      "name": "Build Pollinations URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3280,
+        480
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prompt = $json.description;\nconst encoded = encodeURIComponent(prompt);\nconst seedSrc = `${$json.video_id}-${$json.shot_index}`;\nlet seed = 0;\nfor (let i = 0; i < seedSrc.length; i++) seed = (seed * 31 + seedSrc.charCodeAt(i)) >>> 0;\nconst imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1280&height=720&nologo=true&seed=${seed}`;\nreturn [{ json: { video_id: $json.video_id, shot_index: $json.shot_index, asset_type: $json.asset_type, image_prompt: prompt, image_url: imageUrl } }];"
+      }
+    },
+    {
+      "id": "http-generate-ai-image",
+      "name": "Generate AI Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3500,
+        480
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.image_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "http-upload-image-storage",
+      "name": "Upload Image To Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3720,
+        480
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/storage/v1/object/generated-assets/{{ $('Build Pollinations URL').item.json.video_id }}-{{ $('Build Pollinations URL').item.json.shot_index }}.jpg",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "image/jpeg"
+            },
+            {
+              "name": "x-upsert",
+              "value": "true"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-insert-ai-image-asset",
+      "name": "Insert AI Image Asset Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3940,
+        480
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/assets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { video_id: $('Build Pollinations URL').item.json.video_id, shot_index: $('Build Pollinations URL').item.json.shot_index, type: 'ai_image', storage_url: $('Config').first().json.supabase_url + '/storage/v1/object/public/generated-assets/' + $('Build Pollinations URL').item.json.video_id + '-' + $('Build Pollinations URL').item.json.shot_index + '.jpg', license_note: 'AI-generated via Pollinations.ai (open Stable Diffusion / Flux family model) — free, no attribution required; spot-check it actually matches the shot description before publish', status: 'approved' } }}",
+        "options": {}
+      }
     }
   ],
   "connections": {
-    "Phase 3 Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
-    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
-    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
-    "Pick Topic Row": { "main": [[{ "node": "Get Video", "type": "main", "index": 0 }]] },
-    "Get Video": { "main": [[{ "node": "Pick Video Row", "type": "main", "index": 0 }]] },
-    "Pick Video Row": { "main": [[{ "node": "Get Final Script", "type": "main", "index": 0 }]] },
-    "Get Final Script": { "main": [[{ "node": "Pick Script Row", "type": "main", "index": 0 }]] },
-    "Pick Script Row": { "main": [[{ "node": "Get Channel", "type": "main", "index": 0 }]] },
-    "Get Channel": { "main": [[{ "node": "Pick Channel Row", "type": "main", "index": 0 }]] },
-    "Pick Channel Row": { "main": [[{ "node": "Build Visual Director Prompt", "type": "main", "index": 0 }]] },
-    "Build Visual Director Prompt": { "main": [[{ "node": "Paste Visual Director Response", "type": "main", "index": 0 }]] },
-    "Paste Visual Director Response": { "main": [[{ "node": "Parse Shot List JSON", "type": "main", "index": 0 }]] },
-    "Parse Shot List JSON": { "main": [[{ "node": "Insert Shot List", "type": "main", "index": 0 }]] },
-    "Insert Shot List": { "main": [[{ "node": "Pick Shot List Row", "type": "main", "index": 0 }]] },
-    "Pick Shot List Row": { "main": [[{ "node": "Split Out Shots", "type": "main", "index": 0 }]] },
-    "Split Out Shots": { "main": [[{ "node": "Is Stock Video Shot?", "type": "main", "index": 0 }]] },
-    "Is Stock Video Shot?": {
+    "Phase 3 Entry": {
       "main": [
-        [{ "node": "Search Pexels", "type": "main", "index": 0 }],
-        [{ "node": "Insert Placeholder Asset Row", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Search Pexels": { "main": [[{ "node": "Pick Top Pexels Result", "type": "main", "index": 0 }]] },
-    "Pick Top Pexels Result": { "main": [[{ "node": "Insert Stock Asset Row", "type": "main", "index": 0 }]] },
-    "Insert Stock Asset Row": { "main": [[{ "node": "Merge Asset Branches", "type": "main", "index": 0 }]] },
-    "Insert Placeholder Asset Row": { "main": [[{ "node": "Merge Asset Branches", "type": "main", "index": 1 }]] },
-    "Merge Asset Branches": { "main": [[{ "node": "Collapse After Assets", "type": "main", "index": 0 }]] },
-    "Collapse After Assets": { "main": [[{ "node": "Build Voiceover Text", "type": "main", "index": 0 }]] },
-    "Build Voiceover Text": { "main": [[{ "node": "Generate Voiceover", "type": "main", "index": 0 }]] },
-    "Generate Voiceover": { "main": [[{ "node": "Upload Voice To Storage", "type": "main", "index": 0 }]] },
-    "Upload Voice To Storage": { "main": [[{ "node": "Insert Voice Track", "type": "main", "index": 0 }]] },
-    "Insert Voice Track": { "main": [[{ "node": "Update Video Stage", "type": "main", "index": 0 }]] },
-    "Update Video Stage": { "main": [[{ "node": "Format Pass Response", "type": "main", "index": 0 }]] }
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Topic": {
+      "main": [
+        [
+          {
+            "node": "Pick Topic Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Topic Row": {
+      "main": [
+        [
+          {
+            "node": "Get Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Video": {
+      "main": [
+        [
+          {
+            "node": "Pick Video Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Video Row": {
+      "main": [
+        [
+          {
+            "node": "Get Final Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Final Script": {
+      "main": [
+        [
+          {
+            "node": "Pick Script Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Script Row": {
+      "main": [
+        [
+          {
+            "node": "Get Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Channel": {
+      "main": [
+        [
+          {
+            "node": "Pick Channel Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Channel Row": {
+      "main": [
+        [
+          {
+            "node": "Build Visual Director Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Visual Director Prompt": {
+      "main": [
+        [
+          {
+            "node": "Paste Visual Director Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Paste Visual Director Response": {
+      "main": [
+        [
+          {
+            "node": "Parse Shot List JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Shot List JSON": {
+      "main": [
+        [
+          {
+            "node": "Insert Shot List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Shot List": {
+      "main": [
+        [
+          {
+            "node": "Pick Shot List Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Shot List Row": {
+      "main": [
+        [
+          {
+            "node": "Split Out Shots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out Shots": {
+      "main": [
+        [
+          {
+            "node": "Is Stock Video Shot?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Stock Video Shot?": {
+      "main": [
+        [
+          {
+            "node": "Search Pexels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is AI Image Shot?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Pexels": {
+      "main": [
+        [
+          {
+            "node": "Pick Top Pexels Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Top Pexels Result": {
+      "main": [
+        [
+          {
+            "node": "Insert Stock Asset Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Stock Asset Row": {
+      "main": [
+        [
+          {
+            "node": "Merge Asset Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Placeholder Asset Row": {
+      "main": [
+        [
+          {
+            "node": "Merge Asset Branches",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Asset Branches": {
+      "main": [
+        [
+          {
+            "node": "Collapse After Assets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collapse After Assets": {
+      "main": [
+        [
+          {
+            "node": "Build Voiceover Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Voiceover Text": {
+      "main": [
+        [
+          {
+            "node": "Generate Voiceover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Voiceover": {
+      "main": [
+        [
+          {
+            "node": "Upload Voice To Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Voice To Storage": {
+      "main": [
+        [
+          {
+            "node": "Insert Voice Track",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Voice Track": {
+      "main": [
+        [
+          {
+            "node": "Update Video Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Video Stage": {
+      "main": [
+        [
+          {
+            "node": "Format Pass Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is AI Image Shot?": {
+      "main": [
+        [
+          {
+            "node": "Build Pollinations URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Placeholder Asset Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Pollinations URL": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Image": {
+      "main": [
+        [
+          {
+            "node": "Upload Image To Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Image To Storage": {
+      "main": [
+        [
+          {
+            "node": "Insert AI Image Asset Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert AI Image Asset Row": {
+      "main": [
+        [
+          {
+            "node": "Merge Asset Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
   },
   "pinData": {},
   "meta": {
