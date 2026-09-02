@@ -1,0 +1,310 @@
+{
+  "name": "Phase 6 — Thumbnail Agent",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -260],
+      "parameters": {
+        "width": 560,
+        "height": 500,
+        "content": "## $0 by design — same copy/paste pattern as Phase 1-2, 5\n\nNo Anthropic API key here either. Pauses on a form showing you the Thumbnail\nAgent's exact system prompt (Agent #8 in 03-AGENT-PROMPTS.md) — copy it into\nyour own Claude.ai / Claude Code chat, then paste the JSON back.\n\n## Known simplifications (honest, not hidden)\n\n- **\"Video title\"** input to the prompt is the Topic Title, not a real\n  SEO-optimized YouTube title — there's no Publishing/SEO Agent (#10) run\n  yet in this build to produce one. Revisit once that phase exists.\n- **\"Recent performance notes\"** is always \"No analytics history yet\" —\n  this is every channel's first video, `analytics_snapshots` is empty.\n- **No actual thumbnail images are generated.** Adobe Firefly Services\n  isn't connected (same limitation as Phase 3's `ai_image` assets), so this\n  only produces and stores the 3 text CONCEPTS (visual description + text\n  overlay + reasoning), not rendered image files. `thumbnails.storage_url`\n  is left null on all 3 rows.\n- `thumbnails` has no dedicated \"concept description\" column — the concept\n  text is packed into `variant_label` (e.g. `A — curiosity/question: ...`)\n  since that's the only free-text column the schema offers. Worth adding a\n  real `concept_text` column later.\n\n## Before running this\n\n1. Requires a video at `videos.stage = 'qc_passed'` (Phase 5 must have\n   passed for this topic first).\n2. Reuses the **Supabase account** credential — wire it into every HTTP\n   node that hits `/rest/v1/...`.\n3. Activate, open the Form Trigger's Production URL, enter the exact Topic\n   Title.\n4. On completion: 3 rows inserted into `thumbnails` (recommended concept\n   marked `selected: true`), `videos.stage` set to `thumbnail_ready`."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Phase 6 Entry",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — Thumbnails",
+        "formDescription": "Phase 6: generate 3 thumbnail concepts for a QC-passed video. Enter the exact Topic Title used in Phase 1-5.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-topic",
+      "name": "Get Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,title,channel_id" },
+            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+      }
+    },
+    {
+      "id": "http-get-video",
+      "name": "Get Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,channel_id,script_id,stage" },
+            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
+            { "name": "stage", "value": "eq.qc_passed" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-video",
+      "name": "Pick Video Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No video at stage \"qc_passed\" found for this topic. Run Phase 5 (phase5-qc.json) and get an overall_pass first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id } }];"
+      }
+    },
+    {
+      "id": "http-get-script",
+      "name": "Get Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "content" },
+            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').first().json.topic_id }}" },
+            { "name": "stage", "value": "eq.final" },
+            { "name": "order", "value": "version.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-script",
+      "name": "Pick Script Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No \"final\" script found for this topic — Phase 2 must have completed with a Critic pass.');\n}\nconst content = items[0].json.content;\nconst match = content.match(/\\[HOOK\\][^\\n]*\\n([\\s\\S]*?)(?:\\n\\n\\[|$)/);\nconst hook = match ? match[1].trim() : content.slice(0, 300).trim();\nreturn [{ json: { script_content: content, hook } }];"
+      }
+    },
+    {
+      "id": "http-get-channel",
+      "name": "Get Channel Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,name,niche,visual_style_notes" },
+            { "name": "id", "value": "=eq.{{ $('Pick Topic Row').first().json.channel_id }}" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-channel",
+      "name": "Pick Channel Info Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Channel not found for this topic — data inconsistency, check the topics/channels tables.');\n}\nconst channel = items[0].json;\nreturn [{ json: { name: channel.name, niche: channel.niche, visual_style_notes: channel.visual_style_notes } }];"
+      }
+    },
+    {
+      "id": "code-build-prompt",
+      "name": "Build Thumbnail Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const topicTitle = $('Pick Topic Row').first().json.topic_title;\nconst hook = $('Pick Script Row').first().json.hook;\nconst channel = $('Pick Channel Info Row').first().json;\n\nconst system = `You are the Thumbnail agent. Generate 3 distinct thumbnail concepts — not 3\nvariations of the same idea.\n\nVideo title: ${topicTitle}\nVideo hook/topic: ${hook}\nChannel visual style: ${channel.visual_style_notes}\nRecent performance notes: No analytics history yet — this is this channel's first video through the pipeline.\n\nFor each concept, specify:\n- The core visual (what's actually depicted)\n- Text overlay, max 4 words — longer text underperforms\n- Why this creates curiosity without misleading about the video's actual content —\n  a thumbnail that overpromises kills retention, not just trust\n\nLabel them A = curiosity/question, B = dramatic visual, C = clean text-forward.\nRecommend which to test first based on recent performance.\n\n--- RESPONSE FORMAT ---\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"concepts\": [\n    { \"label\": \"A\", \"core_visual\": string, \"text_overlay\": string, \"why_not_misleading\": string },\n    { \"label\": \"B\", \"core_visual\": string, \"text_overlay\": string, \"why_not_misleading\": string },\n    { \"label\": \"C\", \"core_visual\": string, \"text_overlay\": string, \"why_not_misleading\": string }\n  ],\n  \"recommended_label\": \"A\" | \"B\" | \"C\",\n  \"recommendation_reason\": string\n}`;\n\nreturn [{ json: { system } }];"
+      }
+    },
+    {
+      "id": "form-paste",
+      "name": "Paste Thumbnail Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1740, 380],
+      "parameters": {
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Claude's Thumbnail JSON", "fieldType": "textarea", "requiredField": true }
+          ]
+        },
+        "options": {
+          "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat, run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build Thumbnail Prompt').first().json.system }}\n\n--- COPY TO HERE ---"
+        }
+      }
+    },
+    {
+      "id": "code-parse",
+      "name": "Parse Thumbnail JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json[\"Claude's Thumbnail JSON\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\nconst valid = parsed && Array.isArray(parsed.concepts) && parsed.concepts.length === 3 && parsed.concepts.every(c => c.label && c.core_visual && c.text_overlay) && parsed.recommended_label;\nif (parseError || !valid) {\n  throw new Error('Could not parse a valid Thumbnail JSON (needs a 3-item \"concepts\" array, each with label/core_visual/text_overlay, plus \"recommended_label\"). Paste error: ' + (parseError || 'missing/malformed fields'));\n}\n\nconst videoId = $('Pick Video Row').first().json.id;\nconst rows = parsed.concepts.map(c => ({\n  video_id: videoId,\n  variant_label: `${c.label} — ${c.text_overlay} | ${c.core_visual}${c.label === parsed.recommended_label ? ` [RECOMMENDED: ${parsed.recommendation_reason || ''}]` : ''}`,\n  storage_url: null,\n  selected: c.label === parsed.recommended_label\n}));\n\nreturn [{ json: { rows, recommended_label: parsed.recommended_label } }];"
+      }
+    },
+    {
+      "id": "http-insert-thumbnails",
+      "name": "Insert Thumbnails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2180, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/thumbnails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.rows }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-update-video",
+      "name": "Mark Thumbnail Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 380],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { stage: 'thumbnail_ready' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2620, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const parsed = $('Parse Thumbnail JSON').first().json;\nreturn [{ json: {\n  result: `3 thumbnail concepts saved — videos.stage set to \"thumbnail_ready\". Recommended: ${parsed.recommended_label}.`,\n  topic: $('Pick Topic Row').first().json.topic_title,\n  video_id: $('Pick Video Row').first().json.id,\n  recommended_label: parsed.recommended_label\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Phase 6 Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
+    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Get Video", "type": "main", "index": 0 }]] },
+    "Get Video": { "main": [[{ "node": "Pick Video Row", "type": "main", "index": 0 }]] },
+    "Pick Video Row": { "main": [[{ "node": "Get Script", "type": "main", "index": 0 }]] },
+    "Get Script": { "main": [[{ "node": "Pick Script Row", "type": "main", "index": 0 }]] },
+    "Pick Script Row": { "main": [[{ "node": "Get Channel Info", "type": "main", "index": 0 }]] },
+    "Get Channel Info": { "main": [[{ "node": "Pick Channel Info Row", "type": "main", "index": 0 }]] },
+    "Pick Channel Info Row": { "main": [[{ "node": "Build Thumbnail Prompt", "type": "main", "index": 0 }]] },
+    "Build Thumbnail Prompt": { "main": [[{ "node": "Paste Thumbnail Response", "type": "main", "index": 0 }]] },
+    "Paste Thumbnail Response": { "main": [[{ "node": "Parse Thumbnail JSON", "type": "main", "index": 0 }]] },
+    "Parse Thumbnail JSON": { "main": [[{ "node": "Insert Thumbnails", "type": "main", "index": 0 }]] },
+    "Insert Thumbnails": { "main": [[{ "node": "Mark Thumbnail Ready", "type": "main", "index": 0 }]] },
+    "Mark Thumbnail Ready": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase6"
+  }
+}
