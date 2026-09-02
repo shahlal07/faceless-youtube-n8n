@@ -78,7 +78,7 @@
       "position": [-20, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Channel Name'];\n  throw new Error(`No channel found named \"${wanted}\". Check spelling/casing against the channels table.`);\n}\nconst channel = items[0].json;\nreturn [{ json: { channel_id: channel.id, name: channel.name, niche: channel.niche, composite_score_weights: channel.composite_score_weights } }];"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  const wanted = $('Config').first().json['Channel Name'];\n  throw new Error(`No channel found named \"${wanted}\". Check spelling/casing against the channels table.`);\n}\nconst channel = items[0].json;\nreturn [{ json: { channel_id: channel.id, name: channel.name, niche: channel.niche, composite_score_weights: channel.composite_score_weights } }];"
       }
     },
     {
@@ -111,7 +111,7 @@
       "position": [420, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No videos exist yet for this channel — nothing to analyze.');\n}\nconst ids = items.map(i => i.json.id);\nreturn [{ json: { video_ids_filter: `in.(${ids.join(',')})` } }];"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No videos exist yet for this channel — nothing to analyze.');\n}\nconst ids = items.map(i => i.json.id);\nreturn [{ json: { video_ids_filter: `in.(${ids.join(',')})` } }];"
       }
     },
     {
@@ -146,7 +146,7 @@
       "position": [860, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No real analytics data exists for this channel yet. analytics_snapshots is empty for its videos — nothing has completed a real YouTube publish + analytics ingestion cycle (no YouTube OAuth is wired in this build, see phase8-publishing.json sticky note). This phase will not fabricate numbers to proceed — populate real analytics_snapshots rows first.');\n}\nreturn items;"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No real analytics data exists for this channel yet. analytics_snapshots is empty for its videos — nothing has completed a real YouTube publish + analytics ingestion cycle (no YouTube OAuth is wired in this build, see phase8-publishing.json sticky note). This phase will not fabricate numbers to proceed — populate real analytics_snapshots rows first.');\n}\nreturn items;"
       }
     },
     {

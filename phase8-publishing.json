@@ -79,7 +79,7 @@
       "position": [-20, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
       }
     },
     {
@@ -115,7 +115,7 @@
       "position": [420, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No video with qc_passed_at set found for this topic. Run Phase 5 (phase5-qc.json) and get an overall_pass first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id } }];"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No video with qc_passed_at set found for this topic. Run Phase 5 (phase5-qc.json) and get an overall_pass first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id } }];"
       }
     },
     {
@@ -151,7 +151,7 @@
       "position": [860, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No \"final\" script found for this topic — Phase 2 must have completed with a Critic pass.');\n}\nreturn [{ json: { script_content: items[0].json.content } }];"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No \"final\" script found for this topic — Phase 2 must have completed with a Critic pass.');\n}\nreturn [{ json: { script_content: items[0].json.content } }];"
       }
     },
     {
@@ -184,7 +184,7 @@
       "position": [1300, 380],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Channel not found for this topic — data inconsistency, check the topics/channels tables.');\n}\nconst channel = items[0].json;\nreturn [{ json: { name: channel.name, niche: channel.niche, brand_voice: channel.brand_voice, made_for_kids: !!channel.made_for_kids } }];"
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('Channel not found for this topic — data inconsistency, check the topics/channels tables.');\n}\nconst channel = items[0].json;\nreturn [{ json: { name: channel.name, niche: channel.niche, brand_voice: channel.brand_voice, made_for_kids: !!channel.made_for_kids } }];"
       }
     },
     {
