@@ -255,6 +255,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [2400, 380],
+      "alwaysOutputData": true,
       "parameters": {
         "method": "GET",
         "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/qc_reports",
