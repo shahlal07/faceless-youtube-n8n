@@ -89,7 +89,7 @@
       "position": [200, 380],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/videos",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
@@ -124,14 +124,14 @@
       "position": [640, 380],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/scripts",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "select", "value": "content" },
-            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').item.json.topic_id }}" },
+            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').first().json.topic_id }}" },
             { "name": "stage", "value": "eq.final" },
             { "name": "order", "value": "version.desc" },
             { "name": "limit", "value": "1" }
@@ -159,14 +159,14 @@
       "position": [1080, 380],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/research_dossiers",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/research_dossiers",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "select", "value": "claims" },
-            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').item.json.topic_id }}" },
+            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').first().json.topic_id }}" },
             { "name": "order", "value": "created_at.desc" },
             { "name": "limit", "value": "1" }
           ]
@@ -193,14 +193,14 @@
       "position": [1520, 380],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/channels",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/channels",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "select", "value": "id,name,niche,brand_voice,made_for_kids" },
-            { "name": "id", "value": "=eq.{{ $('Pick Topic Row').item.json.channel_id }}" }
+            { "name": "id", "value": "=eq.{{ $('Pick Topic Row').first().json.channel_id }}" }
           ]
         },
         "options": {}
@@ -225,14 +225,14 @@
       "position": [1960, 380],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/assets",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/assets",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "select", "value": "id,type,storage_url,license_note,status" },
-            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').item.json.id }}" }
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
           ]
         },
         "options": {}
@@ -257,14 +257,14 @@
       "position": [2400, 380],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/qc_reports",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/qc_reports",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "supabaseApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             { "name": "select", "value": "id,attempt" },
-            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').item.json.id }}" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" },
             { "name": "order", "value": "attempt.desc" },
             { "name": "limit", "value": "1" }
           ]
@@ -307,7 +307,7 @@
           ]
         },
         "options": {
-          "formDescription": "=Open the render_url below yourself first (or in a browsing-capable Claude session) and actually watch/listen to it. Then copy the prompt below into your own Claude.ai or Claude Code chat, run it, and paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build QC Prompt').item.json.system }}\n\n--- COPY TO HERE ---"
+          "formDescription": "=Open the render_url below yourself first (or in a browsing-capable Claude session) and actually watch/listen to it. Then copy the prompt below into your own Claude.ai or Claude Code chat, run it, and paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build QC Prompt').first().json.system }}\n\n--- COPY TO HERE ---"
         }
       }
     },
@@ -357,7 +357,7 @@
           "conditions": [
             {
               "id": "cond-pass",
-              "leftValue": "={{ $('Parse QC JSON').item.json.overall_pass }}",
+              "leftValue": "={{ $('Parse QC JSON').first().json.overall_pass }}",
               "rightValue": true,
               "operator": { "type": "boolean", "operation": "true" }
             }
@@ -408,7 +408,7 @@
           "conditions": [
             {
               "id": "cond-third",
-              "leftValue": "={{ $('Parse QC JSON').item.json.attempt }}",
+              "leftValue": "={{ $('Parse QC JSON').first().json.attempt }}",
               "rightValue": 3,
               "operator": { "type": "number", "operation": "gte" }
             }
