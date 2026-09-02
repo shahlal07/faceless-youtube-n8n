@@ -1,0 +1,427 @@
+{
+  "name": "Phase 10 — YouTube Publish (real)",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -400],
+      "parameters": {
+        "width": 640,
+        "height": 700,
+        "content": "## Real API integration, not copy/paste (like Phase 3/4)\n\nNo Claude prompt here — this hits the real YouTube Data API v3 directly to\nupload the actual rendered video. Requires a **YouTube OAuth2 API**\ncredential wired into every node marked below — see\n`YOUTUBE-OAUTH-SETUP.md` for how to create one. Until that credential\nexists, this workflow cannot run at all.\n\n## HIGHEST-RISK, LEAST-TESTED WORKFLOW IN THIS BUILD\n\nEvery other phase in this build was verified against the real, live n8n\ninstance. This one was written from YouTube API documentation and n8n's\ngeneral HTTP Request node conventions WITHOUT the ability to test it —\nno OAuth credential existed at build time (2026-09-02). Expect to debug\nthis live together once real credentials exist. The specific spots most\nlikely to need adjustment:\n- `Initiate Upload Session`'s `options.response.response.fullResponse`\n  path (needed to read the `Location` response header) — this exact\n  parameter shape can shift between n8n versions.\n- `Compute Binary Size`'s use of `this.helpers.getBinaryDataBuffer` —\n  the standard way to get an exact byte count in a Code node, but worth\n  confirming against whatever n8n version is actually running.\n- `Upload Video Binary`'s binary body configuration (Body Content Type:\n  n8n Binary File, referencing the `data` binary property carried\n  through from `Extract Upload URL`).\n\n## Safety choice: always uploads private, never auto-publishes public\n\n`status.privacyStatus` is hardcoded to `'private'`. A human reviews the\nupload in YouTube Studio and flips it to public themselves — this\nworkflow will never make a video live without a person looking at it\nfirst. This is a deliberate choice, not a limitation to fix later.\n\n## Other simplifications (honest, not hidden)\n\n- `categoryId` is hardcoded to `'27'` (Education) for every channel —\n  reasonable for this build's current channels (Kids, Islam,\n  Geopolitics are all explainer/educational content) but worth a real\n  per-channel field if more channels with different categories get\n  added later.\n- `selfDeclaredMadeForKids` and `containsSyntheticMedia` (YouTube's\n  actual API field name for the synthetic-media disclosure) are pulled\n  directly from Phase 8's `seo_metadata` row — both were already\n  grounded in real data there (channel's `made_for_kids`, and actually\n  approved `ai_image`/`ai_video` assets), not re-guessed here.\n- Shorts are NOT handled by this workflow. Phase 7 only produces Shorts\n  *scripts* (`shorts.storage_url` is always null) — there is no actual\n  rendered short video file anywhere in this pipeline to upload. Real\n  Shorts publishing needs a Shorts assembly step (analogous to Phase 4\n  for long-form) that doesn't exist yet.\n\n## What this does end to end\n\n1. Finds the video via Topic Title, requires: `qc_passed_at` set, a\n   `seo_metadata` row (Phase 8 done), a `queued` `publish_jobs` row\n   (`target: 'long_form'`), and the channel's `youtube_channel_id` set.\n2. Downloads the actual rendered MP4 from `videos.render_url`.\n3. Opens a resumable upload session with YouTube (title/description/\n   tags/disclosure from `seo_metadata`), uploads the binary.\n4. On success: `videos.youtube_video_id` set, `videos.published_at` set\n   to now, `videos.stage` set to `'published'` (still private on\n   YouTube's side until a human flips it). `publish_jobs.status`\n   set to `'done'`.\n\n## Before running this\n\n1. Complete `YOUTUBE-OAUTH-SETUP.md` first — this needs a real YouTube\n   OAuth2 credential, not the Supabase one.\n2. Set `channels.youtube_channel_id` for the channel you're publishing.\n3. Reuses **Supabase account** for the `/rest/v1/...` nodes, and the new\n   **YouTube account** OAuth2 credential for the `googleapis.com` nodes\n   — wire both, don't assume one covers the other.\n4. Activate, open the Form Trigger's Production URL, enter the exact\n   Topic Title."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Phase 10 Entry",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — Publish to YouTube",
+        "formDescription": "Phase 10: uploads the real rendered video to YouTube as PRIVATE (a human must review and flip it public in YouTube Studio). Enter the exact Topic Title used in Phase 1-5.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-topic",
+      "name": "Get Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,title,channel_id" },
+            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+      }
+    },
+    {
+      "id": "http-get-video",
+      "name": "Get Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,channel_id,render_url,youtube_video_id" },
+            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
+            { "name": "qc_passed_at", "value": "not.is.null" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-video",
+      "name": "Pick Video Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No video with qc_passed_at set found for this topic. Run Phase 5 (phase5-qc.json) and get an overall_pass first.');\n}\nconst video = items[0].json;\nif (video.youtube_video_id) {\n  throw new Error(`This video already has a youtube_video_id (${video.youtube_video_id}) — it looks like it was already published. Aborting rather than re-uploading a duplicate.`);\n}\nif (!video.render_url) {\n  throw new Error('This video has no render_url — Phase 4 (Assembly) must complete first.');\n}\nreturn [{ json: { id: video.id, channel_id: video.channel_id, render_url: video.render_url } }];"
+      }
+    },
+    {
+      "id": "http-get-seo",
+      "name": "Get SEO Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/seo_metadata",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "recommended_title,description,tags,synthetic_media_disclosure,made_for_kids" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-seo",
+      "name": "Pick SEO Metadata Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No seo_metadata row found for this video. Run Phase 8 (phase8-publishing.json) first.');\n}\nconst seo = items[0].json;\nreturn [{ json: seo }];"
+      }
+    },
+    {
+      "id": "http-get-publish-job",
+      "name": "Get Publish Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/publish_jobs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,status" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" },
+            { "name": "target", "value": "eq.long_form" },
+            { "name": "status", "value": "eq.queued" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-publish-job",
+      "name": "Pick Publish Job Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('No queued publish_jobs row (target: long_form) found for this video. Either Phase 8 never ran for it, or it was already picked up.');\n}\nreturn [{ json: { publish_job_id: items[0].json.id } }];"
+      }
+    },
+    {
+      "id": "http-get-channel",
+      "name": "Get Channel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,youtube_channel_id" },
+            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.channel_id }}" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-channel",
+      "name": "Pick Channel Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst isEmpty = !items || items.length === 0 || (items.length === 1 && (!items[0].json || Object.keys(items[0].json).length === 0));\nif (isEmpty) {\n  throw new Error('Channel not found — data inconsistency, check the videos/channels tables.');\n}\nconst channel = items[0].json;\nif (!channel.youtube_channel_id) {\n  throw new Error('This channel has no youtube_channel_id set. Complete YOUTUBE-OAUTH-SETUP.md step 7 first.');\n}\nreturn [{ json: { youtube_channel_id: channel.youtube_channel_id } }];"
+      }
+    },
+    {
+      "id": "http-download-video",
+      "name": "Download Video Binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Pick Video Row').first().json.render_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-compute-size",
+      "name": "Compute Binary Size",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nreturn [{ json: { size: buffer.length }, binary: items[0].binary }];"
+      }
+    },
+    {
+      "id": "http-initiate-upload",
+      "name": "Initiate Upload Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/youtube/v3/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "uploadType", "value": "resumable" },
+            { "name": "part", "value": "snippet,status" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Upload-Content-Type", "value": "video/mp4" },
+            { "name": "X-Upload-Content-Length", "value": "={{ $json.size }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { snippet: { title: $('Pick SEO Metadata Row').first().json.recommended_title, description: $('Pick SEO Metadata Row').first().json.description, tags: $('Pick SEO Metadata Row').first().json.tags, categoryId: '27' }, status: { privacyStatus: 'private', selfDeclaredMadeForKids: $('Pick SEO Metadata Row').first().json.made_for_kids, containsSyntheticMedia: $('Pick SEO Metadata Row').first().json.synthetic_media_disclosure } } }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-extract-upload-url",
+      "name": "Extract Upload URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2620, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const resp = $input.first().json;\nconst headers = resp.headers || {};\nconst uploadUrl = headers.location || headers.Location;\nif (!uploadUrl) {\n  throw new Error('YouTube did not return a resumable upload Location header. Full response: ' + JSON.stringify(resp).slice(0, 500));\n}\nreturn [{ json: { upload_url: uploadUrl }, binary: $('Compute Binary Size').first().binary }];"
+      }
+    },
+    {
+      "id": "http-upload-binary",
+      "name": "Upload Video Binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2840, 380],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.upload_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-parse-upload-result",
+      "name": "Parse Upload Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3060, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const resp = $input.first().json;\nif (!resp.id) {\n  throw new Error('YouTube upload did not return a video id. Full response: ' + JSON.stringify(resp).slice(0, 500));\n}\nreturn [{ json: { youtube_video_id: resp.id } }];"
+      }
+    },
+    {
+      "id": "http-update-video",
+      "name": "Update Video Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3280, 380],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { youtube_video_id: $('Parse Upload Result').first().json.youtube_video_id, published_at: $now.toISO(), stage: 'published' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-mark-job-done",
+      "name": "Mark Publish Job Done",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3500, 380],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/publish_jobs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Publish Job Row').first().json.publish_job_id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { status: 'done' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3720, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const youtubeId = $('Parse Upload Result').first().json.youtube_video_id;\nreturn [{ json: {\n  result: 'Uploaded to YouTube as PRIVATE. Review it and flip it public yourself in YouTube Studio.',\n  youtube_video_id: youtubeId,\n  youtube_studio_url: `https://studio.youtube.com/video/${youtubeId}/edit`,\n  video_id: $('Pick Video Row').first().json.id\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Phase 10 Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
+    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Get Video", "type": "main", "index": 0 }]] },
+    "Get Video": { "main": [[{ "node": "Pick Video Row", "type": "main", "index": 0 }]] },
+    "Pick Video Row": { "main": [[{ "node": "Get SEO Metadata", "type": "main", "index": 0 }]] },
+    "Get SEO Metadata": { "main": [[{ "node": "Pick SEO Metadata Row", "type": "main", "index": 0 }]] },
+    "Pick SEO Metadata Row": { "main": [[{ "node": "Get Publish Job", "type": "main", "index": 0 }]] },
+    "Get Publish Job": { "main": [[{ "node": "Pick Publish Job Row", "type": "main", "index": 0 }]] },
+    "Pick Publish Job Row": { "main": [[{ "node": "Get Channel", "type": "main", "index": 0 }]] },
+    "Get Channel": { "main": [[{ "node": "Pick Channel Row", "type": "main", "index": 0 }]] },
+    "Pick Channel Row": { "main": [[{ "node": "Download Video Binary", "type": "main", "index": 0 }]] },
+    "Download Video Binary": { "main": [[{ "node": "Compute Binary Size", "type": "main", "index": 0 }]] },
+    "Compute Binary Size": { "main": [[{ "node": "Initiate Upload Session", "type": "main", "index": 0 }]] },
+    "Initiate Upload Session": { "main": [[{ "node": "Extract Upload URL", "type": "main", "index": 0 }]] },
+    "Extract Upload URL": { "main": [[{ "node": "Upload Video Binary", "type": "main", "index": 0 }]] },
+    "Upload Video Binary": { "main": [[{ "node": "Parse Upload Result", "type": "main", "index": 0 }]] },
+    "Parse Upload Result": { "main": [[{ "node": "Update Video Record", "type": "main", "index": 0 }]] },
+    "Update Video Record": { "main": [[{ "node": "Mark Publish Job Done", "type": "main", "index": 0 }]] },
+    "Mark Publish Job Done": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase10"
+  }
+}
