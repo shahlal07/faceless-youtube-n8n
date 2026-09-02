@@ -1,0 +1,262 @@
+{
+  "name": "Phase 4B — Render Poll",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -220],
+      "parameters": {
+        "width": 520,
+        "height": 460,
+        "content": "## Catches up renders Phase 4 left pending\n\nPhase 4 requests a Creatomate render, waits 20s once, and checks status ONE\ntime. If Creatomate is still rendering at that point, the video is left at\n`videos.stage = 'render_requested'` with a Creatomate status-check URL\nparked in `render_url`. This workflow finds every video stuck there and\nchecks Creatomate again.\n\n## Before running this\n\n1. Needs the same **Creatomate account** (Header Auth) credential as Phase\n   4's Create Render / Check Render Status nodes, wired into this\n   workflow's own Check Render Status node, plus the **Supabase account**\n   credential on the two Supabase HTTP nodes.\n2. Two ways to run it: click 'Execute workflow' in the editor any time, or\n   activate the workflow to let the Schedule Trigger poll automatically\n   (every 10 minutes) — left INACTIVE by default so you decide when this\n   starts running unattended on the free Render.com instance.\n3. Per pending video: 'succeeded' -> `stage: 'rendered'` +real `render_url`\n   + `duration_seconds`. 'failed' -> `status: 'needs_human'` (stays at\n   `render_requested` so it's visible as stuck). Anything else (still\n   rendering/queued) -> left untouched for the next poll."
+      }
+    },
+    {
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-680, 260],
+      "parameters": {}
+    },
+    {
+      "id": "trigger-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-680, 500],
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "minutes", "minutesInterval": 10 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-pending",
+      "name": "Get Pending Renders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,render_url,stage,status" },
+            { "name": "stage", "value": "eq.render_requested" },
+            { "name": "status", "value": "eq.in_progress" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-extract-render-id",
+      "name": "Extract Render ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nreturn items.map(item => {\n  const video = item.json;\n  const parts = (video.render_url || '').split('/');\n  const renderId = parts[parts.length - 1];\n  if (!renderId) {\n    throw new Error(`Video ${video.id} is at stage 'render_requested' but its render_url (\"${video.render_url}\") has no parseable render id.`);\n  }\n  return { json: { video_id: video.id, render_id: renderId } };\n});"
+      }
+    },
+    {
+      "id": "http-check-render",
+      "name": "Check Render Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.creatomate.com/v2/renders/{{ $json.render_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-parse-result",
+      "name": "Parse Render Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const row = $input.first().json;\nconst idx = $itemIndex;\nconst videoId = $('Extract Render ID').all()[idx].json.video_id;\nreturn [{ json: {\n  video_id: videoId,\n  render_id: row.id,\n  status: row.status,\n  succeeded: row.status === 'succeeded',\n  failed: row.status === 'failed',\n  render_url: row.status === 'succeeded' ? row.url : null,\n  duration_seconds: row.status === 'succeeded' && row.duration ? Math.round(row.duration) : null,\n  error_message: row.status === 'failed' ? (row.errorMessage || 'Creatomate reported status: failed') : null\n} }];"
+      }
+    },
+    {
+      "id": "if-succeeded",
+      "name": "Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [640, 380],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-succeeded",
+              "leftValue": "={{ $json.succeeded }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-update-succeeded",
+      "name": "Mark Rendered",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 260],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $json.video_id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { stage: 'rendered', render_url: $json.render_url, duration_seconds: $json.duration_seconds } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "if-failed",
+      "name": "Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [860, 500],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-failed",
+              "leftValue": "={{ $json.failed }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-update-failed",
+      "name": "Mark Needs Human",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 420],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $json.video_id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { status: 'needs_human' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "noop-still-processing",
+      "name": "Still Processing",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1080, 600],
+      "parameters": {}
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "return $input.all();"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Schedule Trigger": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Pending Renders", "type": "main", "index": 0 }]] },
+    "Get Pending Renders": { "main": [[{ "node": "Extract Render ID", "type": "main", "index": 0 }]] },
+    "Extract Render ID": { "main": [[{ "node": "Check Render Status", "type": "main", "index": 0 }]] },
+    "Check Render Status": { "main": [[{ "node": "Parse Render Result", "type": "main", "index": 0 }]] },
+    "Parse Render Result": { "main": [[{ "node": "Succeeded?", "type": "main", "index": 0 }]] },
+    "Succeeded?": {
+      "main": [
+        [{ "node": "Mark Rendered", "type": "main", "index": 0 }],
+        [{ "node": "Failed?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Failed?": {
+      "main": [
+        [{ "node": "Mark Needs Human", "type": "main", "index": 0 }],
+        [{ "node": "Still Processing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark Rendered": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Mark Needs Human": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Still Processing": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase4b"
+  }
+}

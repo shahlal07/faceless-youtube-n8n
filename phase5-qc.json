@@ -1,0 +1,519 @@
+{
+  "name": "Phase 5 — QC Agent",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -260],
+      "parameters": {
+        "width": 560,
+        "height": 560,
+        "content": "## $0 by design — same copy/paste pattern as Phase 1-2\n\nNo Anthropic API key here either. This pauses on a form showing you the QC\nAgent's exact system prompt (Agent #7 in 03-AGENT-PROMPTS.md) — copy it into\nyour own Claude.ai / Claude Code chat, then paste the JSON verdict back.\n\n## Honest limitation: VISUAL / AUDIO / EDITING\n\nThis workflow gives Claude the script, dossier claims, asset license notes,\nand the render URL/duration as TEXT — it cannot make Claude actually watch\nor listen to the rendered MP4 by itself. Before pasting the prompt into\nyour Claude chat, open `render_url` yourself (or in a Claude session that\ncan browse) and actually watch/listen to it — otherwise those 3 categories\nare a guess, not a real QC pass, and this is the last gate before publish.\n\n## Hard rules this workflow enforces itself (not just trusting the paste)\n\n- Any asset on this video missing `license_note` forces COPYRIGHT (and\n  therefore overall) to FAIL, regardless of what the pasted JSON says —\n  matches 05-PRODUCTION-HARDENING.md #8: \"a missing provenance record is a\n  hard publish blocker.\"\n- `overall_pass` requires ALL 5 categories to pass, recomputed here rather\n  than trusted from the paste.\n\n## Before running this\n\n1. Requires a video at `videos.stage = 'rendered'` (Phase 4, or Phase 4B's\n   Render Poll, must have completed first).\n2. Reuses the **Supabase account** credential — wire it into every HTTP\n   node that hits `/rest/v1/...`.\n3. Activate, open the Form Trigger's Production URL, enter the exact Topic\n   Title.\n4. On a pass: `videos.stage = 'qc_passed'`. On a fail: nothing changes on\n   the video except a new `qc_reports` row — go fix the stage named in\n   `rework_reason`/`rework_stage` by hand (re-run that phase's form), then\n   re-submit this form. On the 3rd fail for the same video:\n   `videos.status = 'needs_human'` — no auto-loop, no email alert wired\n   yet (no Resend/Gmail credential exists in this n8n instance); the\n   read-only dashboard is where that shows up for now."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Phase 5 Entry",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — QC",
+        "formDescription": "Phase 5: run the QC Agent against a rendered video. Enter the exact Topic Title used in Phase 1-4.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-topic",
+      "name": "Get Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,title,channel_id" },
+            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+      }
+    },
+    {
+      "id": "http-get-video",
+      "name": "Get Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,channel_id,script_id,stage,render_url,duration_seconds" },
+            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
+            { "name": "stage", "value": "eq.rendered" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-video",
+      "name": "Pick Video Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No video at stage \"rendered\" found for this topic. Run Phase 4 (phase4-assembly.json), and Phase 4B (phase4b-render-poll.json) if it is still stuck at \"render_requested\", for this topic first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id, render_url: video.render_url, duration_seconds: video.duration_seconds } }];"
+      }
+    },
+    {
+      "id": "http-get-script",
+      "name": "Get Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 260],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "content" },
+            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').item.json.topic_id }}" },
+            { "name": "stage", "value": "eq.final" },
+            { "name": "order", "value": "version.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-script",
+      "name": "Pick Script Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 260],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No \"final\" script found for this topic — Phase 2 must have completed with a Critic pass.');\n}\nreturn [{ json: { script_content: items[0].json.content } }];"
+      }
+    },
+    {
+      "id": "http-get-dossier",
+      "name": "Get Dossier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/research_dossiers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "claims" },
+            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').item.json.topic_id }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-dossier",
+      "name": "Pick Dossier Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No research dossier found for this topic — Phase 1 must have completed.');\n}\nconst claims = Array.isArray(items[0].json.claims) ? items[0].json.claims : [];\nreturn [{ json: { claims } }];"
+      }
+    },
+    {
+      "id": "http-get-channel",
+      "name": "Get Channel Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,name,niche,brand_voice,made_for_kids" },
+            { "name": "id", "value": "=eq.{{ $('Pick Topic Row').item.json.channel_id }}" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-channel",
+      "name": "Pick Channel Info Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 500],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Channel not found for this topic — data inconsistency, check the topics/channels tables.');\n}\nconst channel = items[0].json;\nreturn [{ json: { name: channel.name, niche: channel.niche, brand_voice: channel.brand_voice, made_for_kids: !!channel.made_for_kids } }];"
+      }
+    },
+    {
+      "id": "http-get-assets",
+      "name": "Get Assets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/assets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,type,storage_url,license_note,status" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').item.json.id }}" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-assets",
+      "name": "Pick Assets Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst assets = items.map(i => i.json);\nconst missingLicenseCount = assets.filter(a => !a.license_note).length;\nreturn [{ json: { assets, missing_license_count: missingLicenseCount } }];"
+      }
+    },
+    {
+      "id": "http-get-prior-qc",
+      "name": "Get Prior QC Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').item.json.supabase_url }}/rest/v1/qc_reports",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,attempt" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').item.json.id }}" },
+            { "name": "order", "value": "attempt.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-pick-prior-qc",
+      "name": "Pick Prior QC Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst priorAttempt = (items.length > 0 && items[0].json.attempt) ? items[0].json.attempt : 0;\nreturn [{ json: { next_attempt: priorAttempt + 1 } }];"
+      }
+    },
+    {
+      "id": "code-build-qc-prompt",
+      "name": "Build QC Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const claims = $('Pick Dossier Row').first().json.claims;\nconst scriptContent = $('Pick Script Row').first().json.script_content;\nconst channel = $('Pick Channel Info Row').first().json;\nconst video = $('Pick Video Row').first().json;\nconst assets = $('Pick Assets Rows').first().json.assets;\nconst missingLicenseCount = $('Pick Assets Rows').first().json.missing_license_count;\nconst attempt = $('Pick Prior QC Row').first().json.next_attempt;\nconst topicTitle = $('Pick Topic Row').first().json.topic_title;\n\nconst kidsClause = channel.made_for_kids\n  ? '\\n\\nThis IS a made-for-kids channel. Additionally confirm: nothing in the content, imagery, or themes is inappropriate for young children, and there is no call to action that could read as soliciting children to click an external link or buy something. Report this as \"kids_safety_pass\": true|false.'\n  : '\\n\\nThis is NOT a made-for-kids channel — skip the kids-safety check (report \"kids_safety_pass\": null).';\n\nconst system = `You are the Quality Control agent — the last gate before anything is marked ready\nto publish. Standard: if a human editor would be embarrassed to publish this, it\nfails. Be strict — a pass here is a claim you're staking the channel's credibility on.\n\nReview against 5 categories. For each: PASS or FAIL, plus specific timestamped\nnotes for any fail.\n\n1. FACTUAL — every stated claim matches the dossier's verified claims. No invented\n   numbers, dates, or attributions.\n2. VISUAL — footage matches narration, no distorted AI generation artifacts,\n   correct flags/maps/logos, nothing that looks unlicensed.\n3. AUDIO — narration is clear and natural-paced, no clipping, music doesn't compete\n   with voice, no dead air.\n4. EDITING — pacing holds attention, no visual repeated too long, captions (if\n   present) are synced, hook lands within the first 15 seconds.\n5. COPYRIGHT — no unlicensed music, no unlicensed footage, no reproduced\n   copyrighted material (film clips, artwork, published text on screen).\n\noverall_pass = true only if all 5 pass. For any failure, name the exact stage that\nshould receive the rework (research / script / visual director / asset sourcing /\nvoice / assembly) so it doesn't get routed to the wrong place.${kidsClause}\n\n--- MATERIAL FOR THIS VIDEO ---\n\nTopic: ${topicTitle}\nChannel: ${channel.name} (niche: ${channel.niche})\nBrand voice: ${channel.brand_voice}\n\nFinal script:\n${scriptContent}\n\nResearch dossier claims (JSON):\n${JSON.stringify(claims, null, 2)}\n\nAssets used (JSON) — ${missingLicenseCount} of ${assets.length} are missing a license_note:\n${JSON.stringify(assets, null, 2)}\n\nRendered video URL (open this yourself, or in a Claude session that can browse,\nbefore judging VISUAL/AUDIO/EDITING — this prompt alone cannot show it to you):\n${video.render_url}\nReported duration: ${video.duration_seconds ?? 'unknown'} seconds\n\nThis is QC attempt ${attempt} for this video.\n\n--- RESPONSE FORMAT ---\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"factual\": { \"pass\": boolean, \"notes\": string },\n  \"visual\": { \"pass\": boolean, \"notes\": string },\n  \"audio\": { \"pass\": boolean, \"notes\": string },\n  \"editing\": { \"pass\": boolean, \"notes\": string },\n  \"copyright\": { \"pass\": boolean, \"notes\": string },\n  \"overall_pass\": boolean,\n  \"rework_stage\": \"research\" | \"script\" | \"visual_director\" | \"asset_sourcing\" | \"voice\" | \"assembly\" | null,\n  \"rework_reason\": string | null,\n  \"kids_safety_pass\": boolean | null\n}`;\n\nreturn [{ json: { system, attempt } }];"
+      }
+    },
+    {
+      "id": "form-paste-qc",
+      "name": "Paste QC Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [2180, 380],
+      "parameters": {
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Claude's QC JSON", "fieldType": "textarea", "requiredField": true }
+          ]
+        },
+        "options": {
+          "formDescription": "=Open the render_url below yourself first (or in a browsing-capable Claude session) and actually watch/listen to it. Then copy the prompt below into your own Claude.ai or Claude Code chat, run it, and paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build QC Prompt').item.json.system }}\n\n--- COPY TO HERE ---"
+        }
+      }
+    },
+    {
+      "id": "code-parse-qc",
+      "name": "Parse QC JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json[\"Claude's QC JSON\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\nconst categories = ['factual', 'visual', 'audio', 'editing', 'copyright'];\nconst valid = parsed && categories.every(c => parsed[c] && typeof parsed[c].pass === 'boolean');\nif (parseError || !valid) {\n  throw new Error('Could not parse a valid QC JSON (needs factual/visual/audio/editing/copyright objects each with a boolean \"pass\"). Paste error: ' + (parseError || 'missing/malformed category'));\n}\n\nconst missingLicenseCount = $('Pick Assets Rows').first().json.missing_license_count;\nconst attempt = $('Build QC Prompt').first().json.attempt;\nconst videoId = $('Pick Video Row').first().json.id;\n\n// Hard rule, not trusted from the paste: any asset missing a license_note is an\n// automatic copyright fail, per 05-PRODUCTION-HARDENING.md #8.\nlet copyrightPass = parsed.copyright.pass;\nlet copyrightNotes = parsed.copyright.notes;\nif (missingLicenseCount > 0) {\n  copyrightPass = false;\n  copyrightNotes = `${copyrightNotes} [Enforced: ${missingLicenseCount} asset(s) on this video are missing a license_note — hard publish blocker regardless of the QC verdict.]`;\n}\n\nconst kidsSafetyPass = typeof parsed.kids_safety_pass === 'boolean' ? parsed.kids_safety_pass : null;\nconst overallPass = parsed.factual.pass && parsed.visual.pass && parsed.audio.pass && parsed.editing.pass && copyrightPass && (kidsSafetyPass === null || kidsSafetyPass === true);\n\nreturn [{ json: {\n  video_id: videoId,\n  attempt,\n  factual_pass: parsed.factual.pass,\n  visual_pass: parsed.visual.pass,\n  audio_pass: parsed.audio.pass,\n  editing_pass: parsed.editing.pass,\n  copyright_pass: copyrightPass,\n  overall_pass: overallPass,\n  notes: {\n    factual: parsed.factual.notes,\n    visual: parsed.visual.notes,\n    audio: parsed.audio.notes,\n    editing: parsed.editing.notes,\n    copyright: copyrightNotes,\n    rework_stage: parsed.rework_stage || null,\n    rework_reason: parsed.rework_reason || null,\n    kids_safety_pass: kidsSafetyPass,\n    missing_license_count: missingLicenseCount\n  }\n} }];"
+      }
+    },
+    {
+      "id": "http-insert-qc-report",
+      "name": "Insert QC Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2620, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/qc_reports",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { video_id: $json.video_id, factual_pass: $json.factual_pass, visual_pass: $json.visual_pass, audio_pass: $json.audio_pass, editing_pass: $json.editing_pass, copyright_pass: $json.copyright_pass, overall_pass: $json.overall_pass, notes: $json.notes, attempt: $json.attempt } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "if-overall-pass",
+      "name": "Overall Pass?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2840, 380],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-pass",
+              "leftValue": "={{ $('Parse QC JSON').item.json.overall_pass }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-update-pass",
+      "name": "Mark QC Passed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3060, 260],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { stage: 'qc_passed' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "if-third-failure",
+      "name": "3rd Failure?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3060, 500],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-third",
+              "leftValue": "={{ $('Parse QC JSON').item.json.attempt }}",
+              "rightValue": 3,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-update-needs-human",
+      "name": "Mark Needs Human",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3280, 420],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { status: 'needs_human' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "noop-await-rework",
+      "name": "Await Manual Rework",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [3280, 600],
+      "parameters": {}
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3500, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const qc = $('Parse QC JSON').first().json;\nlet result;\nif (qc.overall_pass) {\n  result = `QC PASSED (attempt ${qc.attempt}) — videos.stage set to \"qc_passed\".`;\n} else if (qc.attempt >= 3) {\n  result = `QC FAILED for the 3rd time — videos.status set to \"needs_human\". Rework stage: ${qc.notes.rework_stage || 'unspecified'}. Reason: ${qc.notes.rework_reason || 'see notes'}`;\n} else {\n  result = `QC FAILED (attempt ${qc.attempt}/3) — video left at stage \"rendered\", nothing auto-looped. Rework stage: ${qc.notes.rework_stage || 'unspecified'}. Reason: ${qc.notes.rework_reason || 'see notes'}. Fix it, then re-submit this form.`;\n}\nreturn [{ json: {\n  result,\n  topic: $('Pick Topic Row').first().json.topic_title,\n  video_id: qc.video_id,\n  overall_pass: qc.overall_pass,\n  attempt: qc.attempt,\n  notes: qc.notes\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Phase 5 Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
+    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Get Video", "type": "main", "index": 0 }]] },
+    "Get Video": { "main": [[{ "node": "Pick Video Row", "type": "main", "index": 0 }]] },
+    "Pick Video Row": {
+      "main": [
+        [
+          { "node": "Get Script", "type": "main", "index": 0 },
+          { "node": "Get Dossier", "type": "main", "index": 0 },
+          { "node": "Get Channel Info", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Script": { "main": [[{ "node": "Pick Script Row", "type": "main", "index": 0 }]] },
+    "Get Dossier": { "main": [[{ "node": "Pick Dossier Row", "type": "main", "index": 0 }]] },
+    "Get Channel Info": { "main": [[{ "node": "Pick Channel Info Row", "type": "main", "index": 0 }]] },
+    "Pick Script Row": { "main": [[{ "node": "Get Assets", "type": "main", "index": 0 }]] },
+    "Pick Dossier Row": { "main": [[{ "node": "Get Assets", "type": "main", "index": 0 }]] },
+    "Pick Channel Info Row": { "main": [[{ "node": "Get Assets", "type": "main", "index": 0 }]] },
+    "Get Assets": { "main": [[{ "node": "Pick Assets Rows", "type": "main", "index": 0 }]] },
+    "Pick Assets Rows": { "main": [[{ "node": "Get Prior QC Reports", "type": "main", "index": 0 }]] },
+    "Get Prior QC Reports": { "main": [[{ "node": "Pick Prior QC Row", "type": "main", "index": 0 }]] },
+    "Pick Prior QC Row": { "main": [[{ "node": "Build QC Prompt", "type": "main", "index": 0 }]] },
+    "Build QC Prompt": { "main": [[{ "node": "Paste QC Response", "type": "main", "index": 0 }]] },
+    "Paste QC Response": { "main": [[{ "node": "Parse QC JSON", "type": "main", "index": 0 }]] },
+    "Parse QC JSON": { "main": [[{ "node": "Insert QC Report", "type": "main", "index": 0 }]] },
+    "Insert QC Report": { "main": [[{ "node": "Overall Pass?", "type": "main", "index": 0 }]] },
+    "Overall Pass?": {
+      "main": [
+        [{ "node": "Mark QC Passed", "type": "main", "index": 0 }],
+        [{ "node": "3rd Failure?", "type": "main", "index": 0 }]
+      ]
+    },
+    "3rd Failure?": {
+      "main": [
+        [{ "node": "Mark Needs Human", "type": "main", "index": 0 }],
+        [{ "node": "Await Manual Rework", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark QC Passed": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Mark Needs Human": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Await Manual Rework": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase5"
+  }
+}
