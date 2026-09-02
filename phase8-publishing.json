@@ -1,0 +1,430 @@
+{
+  "name": "Phase 8 — Publishing/SEO Agent",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-680, -320],
+      "parameters": {
+        "width": 600,
+        "height": 620,
+        "content": "## $0 by design — same copy/paste pattern as Phase 1-2, 5-7\n\nNo Anthropic API key here either. Pauses on a form showing you the\nPublishing/SEO Agent's exact system prompt (Agent #10 in\n03-AGENT-PROMPTS.md) — copy it into your own Claude.ai / Claude Code\nchat, then paste the JSON back.\n\n## This is packaging only — it does NOT upload to YouTube\n\nPer 01-ARCHITECTURE.md: \"nothing uploads a new video to YouTube... this\nstage is an HTTP Request node hitting the YouTube Data API's\nvideos.insert endpoint directly, using OAuth credentials.\" No YouTube\nOAuth credential exists in this n8n instance and none was set up this\nbuild — that's real custom work needing your own YouTube channel and\nGoogle Cloud OAuth consent screen, out of scope for a $0 copy/paste\nbuild. This phase generates title/description/tags and queues\n`publish_jobs` rows (status: 'queued') so a real publish step has\nsomething to pick up later — it does not execute a real upload.\n\n## synthetic_media_disclosure and made_for_kids are NOT trusted from the paste\n\nSame principle as Phase 5's copyright hard-rule: these are compliance-\nrelevant facts we can check ourselves, so we don't guess from an LLM\njudgment call.\n- `synthetic_media_disclosure` is computed directly from this video's own\n  `assets` rows: true only if any asset with `type in ('ai_image',\n  'ai_video')` has `status = 'approved'`. The pasted JSON's own\n  `synthetic_media_disclosure`/`synthetic_media_reasoning` fields are\n  still parsed and included in Format Response for visibility, but the\n  stored boolean is always the computed one — if they disagree, the\n  computed one wins and Format Response flags the disagreement.\n- `made_for_kids` is copied straight from `channels.made_for_kids`, never\n  from the paste — it's a real account-level YouTube setting, not\n  something an LLM should be deciding.\n\n## \"Recent performance notes\" is always the same honest placeholder\n\n`analytics_snapshots` is empty for every channel right now (confirmed via\nSQL, 2026-09-02) — no video has gone through a real YouTube publish +\nanalytics cycle, since publishing itself isn't wired (see above). Phase 9\n(Analytics Agent) is what would eventually populate this; until then this\nphase always tells Claude \"No analytics history yet.\"\n\n## Doesn't gate the main pipeline\n\nGates on `videos.qc_passed_at is not null` (same fix as Phase 6/7, see\ntheir sticky notes) — runs in parallel with Thumbnail and Shorts, not\nchained after them. Does not touch `videos.stage`.\n\n## Before running this\n\n1. Requires a video with `qc_passed_at` set (Phase 5 must have passed for\n   this topic first).\n2. Reuses the **Supabase account** credential — wire it into every HTTP\n   node that hits `/rest/v1/...`.\n3. Activate, open the Form Trigger's Production URL, enter the exact\n   Topic Title.\n4. On completion: 1 row inserted into `seo_metadata`, 1 `publish_jobs` row\n   (`target: 'long_form'`, `status: 'queued'`) for the video, plus 1\n   `publish_jobs` row (`target: 'short'`, `status: 'queued'`) per existing\n   `shorts` row for this video, if any."
+      }
+    },
+    {
+      "id": "trigger-1",
+      "name": "Phase 8 Entry",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-680, 380],
+      "parameters": {
+        "formTitle": "Faceless YouTube Studio — Publishing/SEO",
+        "formDescription": "Phase 8: generate upload-ready title variants, description, and tags for a QC-passed video. Enter the exact Topic Title used in Phase 1-5.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Topic Title", "fieldType": "text", "requiredField": true }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 380],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "1", "name": "supabase_url", "type": "string", "value": "https://bgzsdkzfakzwcvplfobq.supabase.co" }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-topic",
+      "name": "Get Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.supabase_url }}/rest/v1/topics",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,title,channel_id" },
+            { "name": "title", "value": "=eq.{{ $json['Topic Title'] }}" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-topic",
+      "name": "Pick Topic Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  const wanted = $('Config').first().json['Topic Title'];\n  throw new Error(`No topic found titled \"${wanted}\". It must exactly match a topic already created in Phase 1.`);\n}\nconst topic = items[0].json;\nreturn [{ json: { topic_id: topic.id, topic_title: topic.title, channel_id: topic.channel_id } }];"
+      }
+    },
+    {
+      "id": "http-get-video",
+      "name": "Get Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,channel_id,script_id" },
+            { "name": "topic_id", "value": "=eq.{{ $json.topic_id }}" },
+            { "name": "qc_passed_at", "value": "not.is.null" },
+            { "name": "order", "value": "created_at.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-video",
+      "name": "Pick Video Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No video with qc_passed_at set found for this topic. Run Phase 5 (phase5-qc.json) and get an overall_pass first.');\n}\nconst video = items[0].json;\nreturn [{ json: { id: video.id, channel_id: video.channel_id, script_id: video.script_id } }];"
+      }
+    },
+    {
+      "id": "http-get-script",
+      "name": "Get Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/scripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "content" },
+            { "name": "topic_id", "value": "=eq.{{ $('Pick Topic Row').first().json.topic_id }}" },
+            { "name": "stage", "value": "eq.final" },
+            { "name": "order", "value": "version.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-script",
+      "name": "Pick Script Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('No \"final\" script found for this topic — Phase 2 must have completed with a Critic pass.');\n}\nreturn [{ json: { script_content: items[0].json.content } }];"
+      }
+    },
+    {
+      "id": "http-get-channel",
+      "name": "Get Channel Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id,name,niche,brand_voice,made_for_kids" },
+            { "name": "id", "value": "=eq.{{ $('Pick Topic Row').first().json.channel_id }}" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-pick-channel",
+      "name": "Pick Channel Info Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nif (!items || items.length === 0) {\n  throw new Error('Channel not found for this topic — data inconsistency, check the topics/channels tables.');\n}\nconst channel = items[0].json;\nreturn [{ json: { name: channel.name, niche: channel.niche, brand_voice: channel.brand_voice, made_for_kids: !!channel.made_for_kids } }];"
+      }
+    },
+    {
+      "id": "http-get-assets",
+      "name": "Get Assets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/assets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "type,status" },
+            { "name": "video_id", "value": "=eq.{{ $('Pick Video Row').first().json.id }}" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-synthetic-media",
+      "name": "Compute Synthetic Media Flag",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst approvedSynthetic = items\n  .map(i => i.json)\n  .filter(a => (a.type === 'ai_image' || a.type === 'ai_video') && a.status === 'approved');\nreturn [{ json: {\n  synthetic_media_disclosure_computed: approvedSynthetic.length > 0,\n  approved_synthetic_asset_types: [...new Set(approvedSynthetic.map(a => a.type))]\n} }];"
+      }
+    },
+    {
+      "id": "code-build-prompt",
+      "name": "Build Publishing Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const script = $('Pick Script Row').first().json.script_content;\nconst channel = $('Pick Channel Info Row').first().json;\nconst synthetic = $('Compute Synthetic Media Flag').first().json;\n\nconst syntheticNote = synthetic.synthetic_media_disclosure_computed\n  ? `This video DOES include approved AI-generated media (asset types: ${synthetic.approved_synthetic_asset_types.join(', ')}). It requires the synthetic-media disclosure.`\n  : `This video does NOT currently have any approved AI-generated (ai_image/ai_video) assets — only non-synthetic assets are approved so far. Based on that, disclosure is likely not required, but say so explicitly rather than assuming.`;\n\nconst madeForKidsNote = channel.made_for_kids\n  ? `This channel IS set to made_for_kids. The self-declared made-for-kids flag will be set on upload — do not write a description or tags that assume personalized ads, comments, or audience data will be available, none of those exist on made-for-kids uploads.`\n  : `This channel is NOT made_for_kids.`;\n\nconst system = `You are the Publishing agent. Generate upload metadata — you don't touch video\ncontent, only packaging.\n\nScript: ${script}\n\nChannel niche: ${channel.niche}\nBrand voice: ${channel.brand_voice || '(none specified)'}\nRecent performance notes: No analytics history yet.\n\n${madeForKidsNote}\n\nSynthetic media check (already determined from this video's real asset records,\ndo not contradict it — just factor it into your description/disclosure notes):\n${syntheticNote}\n\nProduce:\n- 3 title variants (under 60 characters), each with a one-line note on the\n  psychological angle it plays (curiosity gap / stakes / specificity)\n- A description: first 2 lines hook a reader browsing (this shows before \"show\n  more\"), then a fuller summary, then a placeholder for timestamps\n- 15-20 tags, ordered most to least specific\n- A recommendation on which title to launch with, based on recent performance\n\nTitles must accurately represent the video's content — no claim in the title the\nvideo doesn't deliver on. This is a retention and trust issue, not just a policy one.\n\nAlso confirm: does this video contain AI-generated or synthetically altered media\nrequiring disclosure under YouTube's policies? If yes, flag it so the upload step\nsets the disclosure field.\n\n--- RESPONSE FORMAT ---\n\nRespond with JSON only, no prose outside the JSON, matching exactly this shape:\n{\n  \"title_variants\": [\n    { \"title\": string, \"angle\": string },\n    { \"title\": string, \"angle\": string },\n    { \"title\": string, \"angle\": string }\n  ],\n  \"recommended_title\": string,\n  \"recommendation_reason\": string,\n  \"description\": string,\n  \"tags\": [string, ...],\n  \"synthetic_media_disclosure\": boolean,\n  \"synthetic_media_reasoning\": string\n}\n\"tags\" must have between 15 and 20 items.`;\n\nreturn [{ json: { system } }];"
+      }
+    },
+    {
+      "id": "form-paste",
+      "name": "Paste Publishing Response",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [2180, 380],
+      "parameters": {
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Claude's Publishing JSON", "fieldType": "textarea", "requiredField": true }
+          ]
+        },
+        "options": {
+          "formDescription": "=Copy the prompt below into your own Claude.ai or Claude Code chat, run it, then paste the JSON it gives back into the field below.\n\n--- COPY FROM HERE ---\n\n{{ $('Build Publishing Prompt').first().json.system }}\n\n--- COPY TO HERE ---"
+        }
+      }
+    },
+    {
+      "id": "code-parse",
+      "name": "Parse Publishing JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json[\"Claude's Publishing JSON\"] || '';\nlet parsed = null;\nlet parseError = null;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch (e) {\n  parseError = e.message;\n}\nconst valid = parsed &&\n  Array.isArray(parsed.title_variants) && parsed.title_variants.length === 3 &&\n  parsed.title_variants.every(t => t.title && t.angle) &&\n  parsed.recommended_title && parsed.description &&\n  Array.isArray(parsed.tags) && parsed.tags.length >= 15 && parsed.tags.length <= 20;\nif (parseError || !valid) {\n  throw new Error('Could not parse a valid Publishing JSON (needs title_variants: 3 items, recommended_title, description, tags: 15-20 items). Paste error: ' + (parseError || 'missing/malformed fields'));\n}\n\nconst computed = $('Compute Synthetic Media Flag').first().json;\nconst pastedDisclosure = !!parsed.synthetic_media_disclosure;\nconst disclosureAgrees = pastedDisclosure === computed.synthetic_media_disclosure_computed;\n\nconst channel = $('Pick Channel Info Row').first().json;\nconst videoId = $('Pick Video Row').first().json.id;\n\nreturn [{ json: {\n  video_id: videoId,\n  row: {\n    video_id: videoId,\n    title_variants: parsed.title_variants,\n    recommended_title: parsed.recommended_title,\n    recommendation_reason: parsed.recommendation_reason || null,\n    description: parsed.description,\n    tags: parsed.tags,\n    synthetic_media_disclosure: computed.synthetic_media_disclosure_computed,\n    made_for_kids: channel.made_for_kids\n  },\n  pasted_disclosure_claim: pastedDisclosure,\n  pasted_disclosure_reasoning: parsed.synthetic_media_reasoning || null,\n  computed_disclosure: computed.synthetic_media_disclosure_computed,\n  disclosure_agrees: disclosureAgrees\n} }];"
+      }
+    },
+    {
+      "id": "http-insert-seo",
+      "name": "Insert SEO Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2620, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/seo_metadata",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.row }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-insert-publish-job-long",
+      "name": "Insert Publish Job (Long Form)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2840, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/publish_jobs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { video_id: $('Parse Publishing JSON').first().json.video_id, target: 'long_form', status: 'queued' } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-get-shorts",
+      "name": "Get Shorts For Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3060, 380],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/shorts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "id" },
+            { "name": "parent_video_id", "value": "=eq.{{ $('Parse Publishing JSON').first().json.video_id }}" }
+          ]
+        },
+        "options": {},
+        "alwaysOutputData": true
+      }
+    },
+    {
+      "id": "code-build-short-jobs",
+      "name": "Build Short Publish Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3280, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const shorts = $input.all().map(i => i.json).filter(s => s && s.id);\nconst jobs = shorts.map(s => ({ short_id: s.id, target: 'short', status: 'queued' }));\nreturn [{ json: { jobs, has_shorts: jobs.length > 0 } }];"
+      }
+    },
+    {
+      "id": "if-has-shorts",
+      "name": "Has Shorts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3500, 380],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-has-shorts",
+              "leftValue": "={{ $json.has_shorts }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-insert-publish-jobs-shorts",
+      "name": "Insert Publish Jobs (Shorts)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3720, 280],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/publish_jobs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.jobs }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3940, 380],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const parsed = $('Parse Publishing JSON').first().json;\nreturn [{ json: {\n  result: 'SEO metadata saved and publish_jobs queued (not actually uploaded — no YouTube OAuth wired).',\n  topic: $('Pick Topic Row').first().json.topic_title,\n  video_id: parsed.video_id,\n  recommended_title: parsed.row.recommended_title,\n  synthetic_media_disclosure: parsed.computed_disclosure,\n  disclosure_agreed_with_paste: parsed.disclosure_agrees,\n  short_publish_jobs_queued: $('Build Short Publish Jobs').first().json.jobs.length\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Phase 8 Entry": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Get Topic", "type": "main", "index": 0 }]] },
+    "Get Topic": { "main": [[{ "node": "Pick Topic Row", "type": "main", "index": 0 }]] },
+    "Pick Topic Row": { "main": [[{ "node": "Get Video", "type": "main", "index": 0 }]] },
+    "Get Video": { "main": [[{ "node": "Pick Video Row", "type": "main", "index": 0 }]] },
+    "Pick Video Row": { "main": [[{ "node": "Get Script", "type": "main", "index": 0 }]] },
+    "Get Script": { "main": [[{ "node": "Pick Script Row", "type": "main", "index": 0 }]] },
+    "Pick Script Row": { "main": [[{ "node": "Get Channel Info", "type": "main", "index": 0 }]] },
+    "Get Channel Info": { "main": [[{ "node": "Pick Channel Info Row", "type": "main", "index": 0 }]] },
+    "Pick Channel Info Row": { "main": [[{ "node": "Get Assets", "type": "main", "index": 0 }]] },
+    "Get Assets": { "main": [[{ "node": "Compute Synthetic Media Flag", "type": "main", "index": 0 }]] },
+    "Compute Synthetic Media Flag": { "main": [[{ "node": "Build Publishing Prompt", "type": "main", "index": 0 }]] },
+    "Build Publishing Prompt": { "main": [[{ "node": "Paste Publishing Response", "type": "main", "index": 0 }]] },
+    "Paste Publishing Response": { "main": [[{ "node": "Parse Publishing JSON", "type": "main", "index": 0 }]] },
+    "Parse Publishing JSON": { "main": [[{ "node": "Insert SEO Metadata", "type": "main", "index": 0 }]] },
+    "Insert SEO Metadata": { "main": [[{ "node": "Insert Publish Job (Long Form)", "type": "main", "index": 0 }]] },
+    "Insert Publish Job (Long Form)": { "main": [[{ "node": "Get Shorts For Video", "type": "main", "index": 0 }]] },
+    "Get Shorts For Video": { "main": [[{ "node": "Build Short Publish Jobs", "type": "main", "index": 0 }]] },
+    "Build Short Publish Jobs": { "main": [[{ "node": "Has Shorts?", "type": "main", "index": 0 }]] },
+    "Has Shorts?": {
+      "main": [
+        [{ "node": "Insert Publish Jobs (Shorts)", "type": "main", "index": 0 }],
+        [{ "node": "Format Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Publish Jobs (Shorts)": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "faceless-youtube-studio-phase8"
+  }
+}
